@@ -19,13 +19,13 @@ struct LoadedModel {
 enum MeshLoader {
     static func mdlVertexDescriptor() -> MDLVertexDescriptor {
         let mdl = MDLVertexDescriptor()
-        // pos(0)
+
         mdl.attributes[0] = MDLVertexAttribute(name: MDLVertexAttributePosition,
                                                format: .float3, offset: 0, bufferIndex: 0)
-        // normal(1)
+
         mdl.attributes[1] = MDLVertexAttribute(name: MDLVertexAttributeNormal,
                                                format: .float3, offset: MemoryLayout<SIMD3<Float>>.stride, bufferIndex: 0)
-        // uv(2) — opcional, no se usa en shader, pero deja layout estándar
+
         mdl.attributes[2] = MDLVertexAttribute(name: MDLVertexAttributeTextureCoordinate,
                                                format: .float2, offset: MemoryLayout<SIMD3<Float>>.stride*2, bufferIndex: 0)
 
@@ -42,7 +42,6 @@ enum MeshLoader {
         let url = try findOBJ(named: name, subdir: subdir)
 
         let asset = MDLAsset(url: url, vertexDescriptor: vdesc, bufferAllocator: allocator)
-        // sin asset.loadTextures()
 
         guard let mdlMesh = (asset.childObjects(of: MDLMesh.self) as? [MDLMesh])?.first else {
             throw NSError(domain: "MeshLoader", code: -2,
@@ -53,7 +52,6 @@ enum MeshLoader {
             mdlMesh.addNormals(withAttributeNamed: MDLVertexAttributeNormal, creaseThreshold: 0.5)
         }
 
-        // centra/escala para que el modelo quepa en vista
         centerAndScale(mdlMesh: mdlMesh, targetExtent: 1.5)
 
         let mtk = try MTKMesh(mesh: mdlMesh, device: device)

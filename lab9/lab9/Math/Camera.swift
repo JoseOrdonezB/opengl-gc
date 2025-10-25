@@ -9,9 +9,9 @@ import simd
 
 public final class OrbitCamera {
     public var target = SIMD3<Float>(0, 0.7, 0)
-    public var distance: Float = 4.0  // radio
-    public var yaw: Float = 0.0       // en radianes
-    public var pitch: Float = 0.2     // en radianes
+    public var distance: Float = 4.0
+    public var yaw: Float = 0.0
+    public var pitch: Float = 0.2
 
     public var fovY: Float = .pi / 4
     public var aspect: Float = 1
@@ -21,7 +21,6 @@ public final class OrbitCamera {
     public init() {}
 
     public var viewMatrix: simd_float4x4 {
-        // limitar pitch para evitar flip
         let p = max(-.pi * 0.499, min(.pi * 0.499, pitch))
         let dir = SIMD3<Float>(
             cosf(p) * sinf(yaw),
@@ -43,15 +42,12 @@ public final class OrbitCamera {
     }
 
     public func zoom(scale: Float) {
-        // scale < 1 acerca, > 1 aleja; clamp
         distance = max(0.2, min(50.0, distance * scale))
     }
 
     public func pan(delta: SIMD2<Float>) {
-        // pan en espacio de la cámara, proporcional a distancia y FOV
-        let sp = distance * tanf(fovY * 0.5) * 2  // tamaño del plano cercano relativo
+        let sp = distance * tanf(fovY * 0.5) * 2
         let sx = sp * aspect
-        // vectores cámara
         let p = max(-.pi * 0.499, min(.pi * 0.499, pitch))
         let forward = normalize(SIMD3<Float>(cosf(p) * sinf(yaw), sinf(p), cosf(p) * cosf(yaw)))
         let right = normalize(simd_cross(forward, SIMD3<Float>(0, 1, 0)))
