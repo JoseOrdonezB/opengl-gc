@@ -19,8 +19,9 @@ final class Renderer: NSObject, MTKViewDelegate {
     private var depthState: MTLDepthStencilState!
 
     private var mesh: MTKMesh?
-    private var angle: Float = 0
-    private var aspect: Float = 1
+
+    // Cámara
+    let camera = OrbitCamera()
 
     struct Uniforms {
         var model: simd_float4x4
@@ -28,7 +29,6 @@ final class Renderer: NSObject, MTKViewDelegate {
         var proj: simd_float4x4
         var lightDir: SIMD3<Float>
     }
-
     private var uniforms = Uniforms(model: .identity,
                                     view: .identity,
                                     proj: .identity,
@@ -67,7 +67,6 @@ final class Renderer: NSObject, MTKViewDelegate {
         p.vertexDescriptor = vd
         p.colorAttachments[0].pixelFormat = view.colorPixelFormat
         p.depthAttachmentPixelFormat = view.depthStencilPixelFormat
-
         pipeline = try! device.makeRenderPipelineState(descriptor: p)
     }
 
@@ -83,13 +82,12 @@ final class Renderer: NSObject, MTKViewDelegate {
             let loaded: LoadedModel = try MeshLoader.loadOBJ(named: "luigidoll", subdir: "Models", device: device)
             self.mesh = loaded.mtk
         } catch {
-            print("❌ Error cargando el modelo .obj:", error.localizedDescription)
+            print("❌ Error cargando .obj:", error.localizedDescription)
         }
     }
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
-        aspect = Float(size.width / max(size.height, 1))
-        uniforms.proj = .perspective(fovyRadians: .pi/4, aspect: aspect, nearZ: 0.01, farZ: 100)
+        camera.aspect = Float(size.width / max(size.height, 1))
     }
 
     func draw(in view: MTKView) {
@@ -97,13 +95,9 @@ final class Renderer: NSObject, MTKViewDelegate {
               let drawable = view.currentDrawable,
               let mesh = mesh else { return }
 
-        angle += 0.5 * (1.0 / 60.0)
-        let eye = SIMD3<Float>(sinf(angle) * 4.0, 1.8, cosf(angle) * 4.0)
-        let center = SIMD3<Float>(0, 0.7, 0)
-        let up = SIMD3<Float>(0, 1, 0)
-
         uniforms.model = .identity
-        uniforms.view  = .lookAt(eye: eye, center: center, up: up)
+        uniforms.view  = camera.viewMatrix
+        uniforms.proj  = camera.projMatrix
 
         let cmd = commandQueue.makeCommandBuffer()!
         let enc = cmd.makeRenderCommandEncoder(descriptor: pass)!
@@ -127,5 +121,17 @@ final class Renderer: NSObject, MTKViewDelegate {
         enc.endEncoding()
         cmd.present(drawable)
         cmd.commit()
+    }
+
+    // MARK: - Camera input (llamado desde la vista)
+    func handleOrbit(delta: SIMD2<Float>) {
+        // sensibilidad a gusto
+        camera.orbit(deltaYaw: delta.x * 0.5, deltaPitch: delta.y * 0.5)
+    }
+    func handleZoom(by scale: Float) {
+        camera.zoom(scale: scale)
+    }
+    func handlePan(delta: SIMD2<Float>) {
+        camera.pan(delta: delta * 0.1) // ajustar sensibilidad
     }
 }
