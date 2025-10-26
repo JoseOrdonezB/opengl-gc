@@ -14,6 +14,7 @@ final class GestureMTKView: MTKView {
     var onOrbit: ((SIMD2<Float>) -> Void)?
     var onPan:   ((SIMD2<Float>) -> Void)?
     var onZoom:  ((Float) -> Void)?
+    var onKey:   ((Character) -> Void)?
 
     private let orbitSensitivity:  Float = 0.01
     private let panSensitivity:    Float = 0.0015
@@ -43,6 +44,16 @@ final class GestureMTKView: MTKView {
         addGestureRecognizer(mag)
     }
 
+    // Teclado
+    override func keyDown(with event: NSEvent) {
+        if let s = event.charactersIgnoringModifiers {
+            for ch in s { onKey?(ch) }
+        } else {
+            super.keyDown(with: event)
+        }
+    }
+
+    // Ratón
     override func mouseDown(with event: NSEvent) {
         draggingLeft = true
         lastDragPoint = convert(event.locationInWindow, from: nil)
@@ -93,14 +104,35 @@ struct MetalView: NSViewRepresentable {
         view.clearColor = MTLClearColor(red: 0.08, green: 0.09, blue: 0.12, alpha: 1)
         view.isPaused = false
         view.enableSetNeedsDisplay = false
+        view.preferredFramesPerSecond = 60
 
-        let renderer = Renderer(mtkView: view)
-        context.coordinator.renderer = renderer
-        view.delegate = renderer
+        // Crear y RETENER el renderer
+        guard let renderer = Renderer(mtkView: view) else {
+            assertionFailure("No se pudo crear Renderer(mtkView:)")
+            return view
+        }
+        context.coordinator.renderer = renderer   // ← retención fuerte
+        view.delegate = renderer                  // MTKView.delegate es weak
 
+        // Gestos
         view.onOrbit = { [weak renderer] delta in renderer?.handleOrbit(delta: delta) }
         view.onPan   = { [weak renderer] delta in renderer?.handlePan(delta: delta) }
         view.onZoom  = { [weak renderer] scale in renderer?.handleZoom(by: scale) }
+
+        // Teclado: 1 = vertex creativo, 2 = fragment creativo, 0 = reset
+        view.onKey   = { [weak renderer] ch in
+            switch ch {
+            case "1": renderer?.selectVertexShader(index: 1)
+            case "2": renderer?.selectFragmentShader(index: 1)
+            case "0": renderer?.resetShadersToDefault()
+            default: break
+            }
+        }
+
+        // Dar foco para recibir teclado
+        DispatchQueue.main.async {
+            view.window?.makeFirstResponder(view)
+        }
 
         return view
     }
@@ -112,6 +144,7 @@ struct MetalView: NSViewRepresentable {
     }
 
     final class Coordinator {
+        // ⭐️ Retén el renderer FUERTEMENTE (sin `weak`)
         var renderer: Renderer?
     }
 }
