@@ -9,26 +9,23 @@ import Foundation
 import Metal
 import MetalKit
 import simd
-import ModelIO
-import ImageIO   // para leer BMP via ImageIO (CGImageSource)
 
 final class Renderer: NSObject, MTKViewDelegate {
 
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
+
     private var pipeline: MTLRenderPipelineState!
     private var depthState: MTLDepthStencilState!
 
     private var mesh: MTKMesh?
+    private var modelVertexDescriptor: MTLVertexDescriptor?
 
-    // === NOMBRE Y CARPETA DEL MODELO (.obj) ===
-    private let modelName   = "luigidoll" // nombre del .obj SIN extensión
-    private let modelSubdir = "Models"    // subcarpeta dentro del bundle donde están .obj y .bmp
+    private let modelName   = "luigidoll"
+    private let modelSubdir = "Models"
 
-    // Cámara
     let camera = OrbitCamera()
 
-    // Textura BMP única + sampler
     private var baseTexture: MTLTexture?
     private lazy var sampler: MTLSamplerState = {
         let d = MTLSamplerDescriptor()
@@ -37,6 +34,21 @@ final class Renderer: NSObject, MTKViewDelegate {
         d.mipFilter = .linear
         d.sAddressMode = .repeat
         d.tAddressMode = .repeat
+        return device.makeSamplerState(descriptor: d)!
+    }()
+
+    private var skyboxPipeline: MTLRenderPipelineState!
+    private var skyboxDepthState: MTLDepthStencilState!
+    private var skyboxVB: MTLBuffer!
+    private var skyboxTexture: MTLTexture?
+    private lazy var skySampler: MTLSamplerState = {
+        let d = MTLSamplerDescriptor()
+        d.minFilter = .linear
+        d.magFilter = .linear
+        d.mipFilter = .linear
+        d.sAddressMode = .clampToEdge
+        d.tAddressMode = .clampToEdge
+        d.rAddressMode = .clampToEdge
         return device.makeSamplerState(descriptor: d)!
     }()
 
@@ -51,38 +63,47 @@ final class Renderer: NSObject, MTKViewDelegate {
                                     proj: .identity,
                                     lightDir: simd_normalize(SIMD3<Float>(-1, -1, -0.5)))
 
+    struct SkyboxUniforms { var viewProjNoTrans: simd_float4x4 }
+    private var skyU = SkyboxUniforms(viewProjNoTrans: .identity)
+
     init?(mtkView: MTKView) {
         if mtkView.device == nil { mtkView.device = MTLCreateSystemDefaultDevice() }
         guard let dev = mtkView.device, let q = dev.makeCommandQueue() else { return nil }
-        device = dev
-        commandQueue = q
+        self.device = dev
+        self.commandQueue = q
         super.init()
 
         mtkView.colorPixelFormat = .bgra8Unorm
         mtkView.depthStencilPixelFormat = .depth32Float
         mtkView.clearColor = MTLClearColor(red: 0.08, green: 0.09, blue: 0.12, alpha: 1)
 
-        buildPipeline(view: mtkView)
-        buildDepth()
         loadMesh()
-        loadBMPTexture()   // intenta encontrar un .bmp junto al .obj
+        buildMeshPipeline(view: mtkView)
+        buildDepth()
+        loadBMPTexture()
+
+        buildSkyboxPipeline(view: mtkView)
+        loadSkybox()
     }
 
-    private func buildPipeline(view: MTKView) {
+    private func buildMeshPipeline(view: MTKView) {
         let lib = try! device.makeDefaultLibrary(bundle: .main)
         let v = lib.makeFunction(name: "v_main")!
         let f = lib.makeFunction(name: "f_main")!
 
-        let vd = MTLVertexDescriptor()
-        vd.attributes[0].format = .float3; vd.attributes[0].offset = 0; vd.attributes[0].bufferIndex = 0
-        vd.attributes[1].format = .float3; vd.attributes[1].offset = MemoryLayout<SIMD3<Float>>.stride; vd.attributes[1].bufferIndex = 0
-        vd.attributes[2].format = .float2; vd.attributes[2].offset = MemoryLayout<SIMD3<Float>>.stride*2; vd.attributes[2].bufferIndex = 0
-        vd.layouts[0].stride = MemoryLayout<SIMD3<Float>>.stride*2 + MemoryLayout<SIMD2<Float>>.stride
-
         let p = MTLRenderPipelineDescriptor()
         p.vertexFunction = v
         p.fragmentFunction = f
-        p.vertexDescriptor = vd
+        p.vertexDescriptor = modelVertexDescriptor ?? {
+            let vd = MTLVertexDescriptor()
+            vd.attributes[0].format = .float3; vd.attributes[0].offset = 0; vd.attributes[0].bufferIndex = 0
+            vd.attributes[1].format = .float3; vd.attributes[1].offset = MemoryLayout<SIMD3<Float>>.stride; vd.attributes[1].bufferIndex = 0
+            vd.attributes[2].format = .float2; vd.attributes[2].offset = MemoryLayout<SIMD3<Float>>.stride * 2; vd.attributes[2].bufferIndex = 0
+            vd.layouts[0].stride = MemoryLayout<SIMD3<Float>>.stride * 2 + MemoryLayout<SIMD2<Float>>.stride
+            vd.layouts[0].stepFunction = .perVertex
+            return vd
+        }()
+
         p.colorAttachments[0].pixelFormat = view.colorPixelFormat
         p.depthAttachmentPixelFormat = view.depthStencilPixelFormat
         pipeline = try! device.makeRenderPipelineState(descriptor: p)
@@ -95,75 +116,92 @@ final class Renderer: NSObject, MTKViewDelegate {
         depthState = device.makeDepthStencilState(descriptor: d)
     }
 
+    private func buildSkyboxPipeline(view: MTKView) {
+        let lib = try! device.makeDefaultLibrary(bundle: .main)
+        let v = lib.makeFunction(name: "skybox_v_main")!
+        let f = lib.makeFunction(name: "skybox_f_main")!
+
+        let p = MTLRenderPipelineDescriptor()
+        p.vertexFunction = v
+        p.fragmentFunction = f
+        p.vertexDescriptor = nil
+        p.colorAttachments[0].pixelFormat = view.colorPixelFormat
+        p.depthAttachmentPixelFormat = view.depthStencilPixelFormat
+        skyboxPipeline = try! device.makeRenderPipelineState(descriptor: p)
+
+        let d = MTLDepthStencilDescriptor()
+        d.isDepthWriteEnabled = false
+        d.depthCompareFunction = .lessEqual
+        skyboxDepthState = device.makeDepthStencilState(descriptor: d)
+    }
+
     private func loadMesh() {
         do {
-            let loaded: LoadedModel = try MeshLoader.loadOBJ(named: modelName, subdir: modelSubdir, device: device)
+            let loaded = try MeshLoader.loadOBJ(named: modelName, subdir: modelSubdir, device: device, flipVTexcoords: false)
             self.mesh = loaded.mtk
+            self.modelVertexDescriptor = loaded.mtlVertexDescriptor
         } catch {
-            print("❌ Error cargando .obj:", error.localizedDescription)
+            print("❌ OBJ:", error.localizedDescription)
         }
     }
 
-    // MARK: - BMP loader (auto-detección junto al .obj)
     private func loadBMPTexture() {
-        let loader = MTKTextureLoader(device: device)
-        let options: [MTKTextureLoader.Option: Any] = [
-            .SRGB: true as NSNumber,
-            .allocateMipmaps: true as NSNumber
-            // .origin: MTKTextureLoader.Origin.flippedVertically as NSString // descomenta si la ves invertida
-        ]
-
-        func texture(from url: URL) throws -> MTLTexture {
-            if url.pathExtension.lowercased() == "bmp" {
-                // ImageIO -> CGImage -> newTexture(cgImage:)
-                guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
-                      let cg  = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
-                    throw NSError(domain: "Renderer",
-                                  code: -100,
-                                  userInfo: [NSLocalizedDescriptionKey: "ImageIO no pudo abrir BMP \(url.lastPathComponent)"])
-                }
-                return try loader.newTexture(cgImage: cg, options: options)
-            } else {
-                return try loader.newTexture(URL: url, options: options)
-            }
-        }
-
-        // 1) Intentar modelName.bmp en la misma subcarpeta del modelo
+        let flip = false
         if let url = Bundle.main.url(forResource: modelName, withExtension: "bmp", subdirectory: modelSubdir),
-           let tex = try? texture(from: url) {
+           let tex = try? TextureLoaderBMP.loadTexture(from: url, device: device, srgb: true, flipVertical: flip) {
             baseTexture = tex
-            print("✅ BMP (match por nombre): \(url.lastPathComponent) \(tex.width)x\(tex.height)")
+            print("✅ BMP:", url.lastPathComponent, "\(tex.width)x\(tex.height)")
             return
         }
-
-        // 2) Buscar cualquier .bmp en la carpeta del modelo
         if let urls = Bundle.main.urls(forResourcesWithExtension: "bmp", subdirectory: modelSubdir),
            let url = urls.first,
-           let tex = try? texture(from: url) {
+           let tex = try? TextureLoaderBMP.loadTexture(from: url, device: device, srgb: true, flipVertical: flip) {
             baseTexture = tex
-            print("✅ BMP (primero en carpeta \(modelSubdir)): \(url.lastPathComponent) \(tex.width)x\(tex.height)")
+            print("✅ BMP:", url.lastPathComponent, "\(tex.width)x\(tex.height)")
             return
         }
-
-        // 3) Buscar cualquier .bmp en TODO el bundle
         if let urls = Bundle.main.urls(forResourcesWithExtension: "bmp", subdirectory: nil),
            let url = urls.first,
-           let tex = try? texture(from: url) {
+           let tex = try? TextureLoaderBMP.loadTexture(from: url, device: device, srgb: true, flipVertical: flip) {
             baseTexture = tex
-            print("✅ BMP (primero en bundle): \(url.lastPathComponent) \(tex.width)x\(tex.height)")
+            print("✅ BMP:", url.lastPathComponent, "\(tex.width)x\(tex.height)")
             return
         }
-
-        // 4) Fallback visible (checkerboard) — te indica que no se halló el BMP
-        print("❌ No encontré ninguna textura .bmp en el bundle.")
         baseTexture = makeCheckerTexture()
+        print("⚠️ BMP no encontrada. Usando checker.")
     }
 
-    // Checkerboard para diagnosticar (si no se encontró BMP)
+    private func loadSkybox() {
+        let verts: [SIMD3<Float>] = [
+            [ 1,-1,-1],[ 1,-1, 1],[ 1, 1, 1],[ 1,-1,-1],[ 1, 1, 1],[ 1, 1,-1],
+            [-1,-1, 1],[-1,-1,-1],[-1, 1,-1],[-1,-1, 1],[-1, 1,-1],[-1, 1, 1],
+            [-1, 1,-1],[ 1, 1,-1],[ 1, 1, 1],[-1, 1,-1],[ 1, 1, 1],[-1, 1, 1],
+            [-1,-1, 1],[ 1,-1, 1],[ 1,-1,-1],[-1,-1, 1],[ 1,-1,-1],[-1,-1,-1],
+            [ 1,-1, 1],[-1,-1, 1],[-1, 1, 1],[ 1,-1, 1],[-1, 1, 1],[ 1, 1, 1],
+            [-1,-1,-1],[ 1,-1,-1],[ 1, 1,-1],[-1,-1,-1],[ 1, 1,-1],[-1, 1,-1],
+        ]
+        skyboxVB = device.makeBuffer(bytes: verts,
+                                     length: verts.count * MemoryLayout<SIMD3<Float>>.stride,
+                                     options: .storageModeShared)
+
+        do {
+            skyboxTexture = try SkyboxLoader.loadCubeTextureSmart(
+                device: device, base: "sky_", ext: "png", subdir: "Sky",
+                srgb: false, flipVertical: false
+            )
+            if let t = skyboxTexture {
+                print("✅ Skybox:", "\(t.width)x\(t.height)")
+            }
+        } catch {
+            print("⚠️ Skybox:", error.localizedDescription)
+            skyboxTexture = nil
+        }
+    }
+
     private func makeCheckerTexture(size: Int = 128, tile: Int = 16) -> MTLTexture {
         let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm,
                                                             width: size, height: size, mipmapped: false)
-        desc.usage = [.shaderRead]
+        desc.usage = .shaderRead
         let tex = device.makeTexture(descriptor: desc)!
         var pixels = [UInt8](repeating: 0, count: size * size * 4)
         for y in 0..<size {
@@ -181,7 +219,11 @@ final class Renderer: NSObject, MTKViewDelegate {
         return tex
     }
 
-    // MARK: - MTKViewDelegate
+    private func viewProjNoTranslation(view: simd_float4x4, proj: simd_float4x4) -> simd_float4x4 {
+        var v = view
+        v.columns.3 = .init(0, 0, 0, v.columns.3.w)
+        return proj * v
+    }
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
         camera.aspect = Float(size.width / max(size.height, 1))
@@ -189,8 +231,7 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     func draw(in view: MTKView) {
         guard let pass = view.currentRenderPassDescriptor,
-              let drawable = view.currentDrawable,
-              let mesh = mesh else { return }
+              let drawable = view.currentDrawable else { return }
 
         uniforms.model = .identity
         uniforms.view  = camera.viewMatrix
@@ -198,25 +239,41 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         let cmd = commandQueue.makeCommandBuffer()!
         let enc = cmd.makeRenderCommandEncoder(descriptor: pass)!
-        enc.setRenderPipelineState(pipeline)
-        enc.setDepthStencilState(depthState)
 
-        for (i, vb) in mesh.vertexBuffers.enumerated() {
-            enc.setVertexBuffer(vb.buffer, offset: vb.offset, index: i)
+        if let skyTex = skyboxTexture, let skyVB = skyboxVB {
+            skyU.viewProjNoTrans = viewProjNoTranslation(view: uniforms.view, proj: uniforms.proj)
+            enc.setRenderPipelineState(skyboxPipeline)
+            enc.setDepthStencilState(skyboxDepthState)
+            enc.setCullMode(.front)
+            enc.setVertexBuffer(skyVB, offset: 0, index: 0)
+            enc.setVertexBytes(&skyU, length: MemoryLayout<SkyboxUniforms>.stride, index: 1)
+            enc.setFragmentTexture(skyTex, index: 0)
+            enc.setFragmentSamplerState(skySampler, index: 0)
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 36)
+            enc.setCullMode(.back)
         }
-        enc.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
-        enc.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
 
-        // Bind sampler + textura BMP (si no se encontró, quedará checkerboard)
-        enc.setFragmentSamplerState(sampler, index: 0)
-        enc.setFragmentTexture(baseTexture, index: 0)
+        if let mesh = mesh {
+            enc.setRenderPipelineState(pipeline)
+            enc.setDepthStencilState(depthState)
+            enc.setCullMode(.back)
+            enc.setFrontFacing(.counterClockwise)
 
-        for sub in mesh.submeshes {
-            enc.drawIndexedPrimitives(type: .triangle,
-                                      indexCount: sub.indexCount,
-                                      indexType: sub.indexType,
-                                      indexBuffer: sub.indexBuffer.buffer,
-                                      indexBufferOffset: sub.indexBuffer.offset)
+            for (i, vb) in mesh.vertexBuffers.enumerated() {
+                enc.setVertexBuffer(vb.buffer, offset: vb.offset, index: i)
+            }
+            enc.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+            enc.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+            enc.setFragmentSamplerState(sampler, index: 0)
+            enc.setFragmentTexture(baseTexture, index: 0)
+
+            for sub in mesh.submeshes {
+                enc.drawIndexedPrimitives(type: .triangle,
+                                          indexCount: sub.indexCount,
+                                          indexType: sub.indexType,
+                                          indexBuffer: sub.indexBuffer.buffer,
+                                          indexBufferOffset: sub.indexBuffer.offset)
+            }
         }
 
         enc.endEncoding()
@@ -224,14 +281,11 @@ final class Renderer: NSObject, MTKViewDelegate {
         cmd.commit()
     }
 
-    // MARK: - Camera input
-    func handleOrbit(delta: SIMD2<Float>) {
-        camera.orbit(deltaYaw: delta.x * -0.7, deltaPitch: delta.y * 0.7)
-    }
-    func handleZoom(by scale: Float) {
-        camera.zoom(scale: scale)
-    }
-    func handlePan(delta: SIMD2<Float>) {
-        camera.pan(delta: delta * 0.2)
-    }
+    func handleOrbit(delta: SIMD2<Float>) { camera.orbit(deltaYaw: delta.x * -0.5, deltaPitch: delta.y * 0.5) }
+    func handleZoom(by scale: Float)      { camera.zoom(scale: scale) }
+    func handlePan(delta: SIMD2<Float>)   { camera.pan(delta: delta * 80.0) }
 }
+
+
+
+

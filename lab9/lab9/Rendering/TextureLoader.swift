@@ -9,16 +9,16 @@ import Foundation
 import Metal
 import MetalKit
 import ImageIO
+import CoreGraphics
 
 enum TextureLoaderBMP {
-    /// Carga una textura (BMP u otros) del bundle. No usa .mtl.
+
     static func loadTexture(named name: String,
                             ext: String = "bmp",
                             subdir: String? = nil,
                             device: MTLDevice,
                             srgb: Bool = true,
                             flipVertical: Bool = false) throws -> MTLTexture {
-        // Localiza el archivo
         guard let url = Bundle.main.url(forResource: name, withExtension: ext, subdirectory: subdir) else {
             throw NSError(domain: "TextureLoaderBMP", code: -1,
                           userInfo: [NSLocalizedDescriptionKey: "No encontré \(name).\(ext) en \(subdir ?? "(bundle)")"])
@@ -26,7 +26,6 @@ enum TextureLoaderBMP {
         return try loadTexture(from: url, device: device, srgb: srgb, flipVertical: flipVertical)
     }
 
-    /// Carga desde URL (detecta BMP y usa CGImage; otros formatos pasan por MTKTextureLoader).
     static func loadTexture(from url: URL,
                             device: MTLDevice,
                             srgb: Bool = true,
@@ -36,7 +35,9 @@ enum TextureLoaderBMP {
 
         var options: [MTKTextureLoader.Option: Any] = [
             .SRGB: srgb as NSNumber,
-            .allocateMipmaps: true as NSNumber
+            .generateMipmaps: true as NSNumber,
+            .allocateMipmaps: true as NSNumber,
+            .textureUsage: NSNumber(value: MTLTextureUsage.shaderRead.rawValue)
         ]
         if flipVertical {
             options[.origin] = MTKTextureLoader.Origin.flippedVertically as NSString
