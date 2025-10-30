@@ -24,13 +24,14 @@ final class Renderer: NSObject, MTKViewDelegate {
     private var cachedColorFormat: MTLPixelFormat = .bgra8Unorm
     private var cachedDepthFormat: MTLPixelFormat = .depth32Float
 
-    private var currentVertexFnName: String = "v_main"
+    private var currentVertexFnName: String   = "v_main"
     private var currentFragmentFnName: String = "f_main"
 
     private let modelName   = "luigidoll"
     private let modelSubdir = "Models"
 
     let camera = OrbitCamera()
+    private var useDebugCamera = false
 
     private var baseTexture: MTLTexture?
     private lazy var sampler: MTLSamplerState = {
@@ -43,7 +44,6 @@ final class Renderer: NSObject, MTKViewDelegate {
         return device.makeSamplerState(descriptor: d)!
     }()
 
-    // Skybox
     private var skyboxPipeline: MTLRenderPipelineState!
     private var skyboxDepthState: MTLDepthStencilState!
     private var skyboxVB: MTLBuffer!
@@ -60,9 +60,9 @@ final class Renderer: NSObject, MTKViewDelegate {
     }()
 
     struct Uniforms {
-        var model: simd_float4x4
-        var view:  simd_float4x4
-        var proj:  simd_float4x4
+        var model:    simd_float4x4
+        var view:     simd_float4x4
+        var proj:     simd_float4x4
         var lightDir: SIMD3<Float>
         var ambient:  Float
     }
@@ -70,14 +70,13 @@ final class Renderer: NSObject, MTKViewDelegate {
                                     view:  .identity,
                                     proj:  .identity,
                                     lightDir: simd_normalize(SIMD3<Float>(-1, -1, -0.5)),
-                                    ambient: 0.5)
+                                    ambient: 0.9)
 
     struct SkyboxUniforms { var viewProjNoTrans: simd_float4x4 }
     private var skyU = SkyboxUniforms(viewProjNoTrans: .identity)
 
     private var printedIndexInfo = false
 
-    // MARK: - Init
     init?(mtkView: MTKView) {
         if mtkView.device == nil { mtkView.device = MTLCreateSystemDefaultDevice() }
         guard let dev = mtkView.device, let q = dev.makeCommandQueue() else { return nil }
@@ -92,7 +91,6 @@ final class Renderer: NSObject, MTKViewDelegate {
         cachedColorFormat = mtkView.colorPixelFormat
         cachedDepthFormat = mtkView.depthStencilPixelFormat
 
-        // Si drawable aún es 0x0, no pasa nada: lo recalculamos en draw()
         let ds = mtkView.drawableSize
         camera.aspect = Float(ds.width / max(1.0, ds.height))
 
@@ -111,12 +109,11 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
     }
 
-    // MARK: - Pipelines (malla)
-    private func buildMeshPipeline() { rebuildPipelineWithCurrentView() }
+    private func buildMeshPipeline() { rebuildPipeline() }
 
-    private func rebuildPipelineWithCurrentView() {
+    private func rebuildPipeline() {
         guard let lib = device.makeDefaultLibrary() else {
-            print("❌ Default library ausente (revisa Target Membership de los .metal)")
+            print("❌ Default library ausente (Target Membership .metal)")
             return
         }
         guard let v = lib.makeFunction(name: currentVertexFnName) else {
@@ -154,34 +151,34 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
     }
 
-    // Conmutadores
     func selectVertexShader(index: Int) {
-        if index == 1 {
-            currentVertexFnName   = "v_creative"
-            currentFragmentFnName = "f_creative_simple"
-        } else {
-            currentVertexFnName   = "v_main"
-            if currentFragmentFnName == "f_creative_simple" { currentFragmentFnName = "f_main" }
+        switch index {
+        case 1: currentVertexFnName = "v_noise_deform"
+        case 2: currentVertexFnName = "v_thin_shrink"
+        case 3: currentVertexFnName = "v_twist_y"
+        default: currentVertexFnName = "v_main"
         }
-        rebuildPipelineWithCurrentView()
+        rebuildPipeline()
     }
+
     func selectFragmentShader(index: Int) {
-        if index == 1 {
-            currentFragmentFnName = "f_creative"
-            currentVertexFnName   = "v_main"
-        } else {
-            currentFragmentFnName = "f_main"
-            if currentVertexFnName == "v_creative" { currentVertexFnName = "v_main" }
+        switch index {
+        case 1: currentFragmentFnName = "f_metal"
+        case 2: currentFragmentFnName = "f_toon_rim"
+        case 3: currentFragmentFnName = "f_matcap_solid"
+        default: currentFragmentFnName = "f_main"
         }
-        rebuildPipelineWithCurrentView()
+        rebuildPipeline()
     }
+
     func resetShadersToDefault() {
         currentVertexFnName   = "v_main"
         currentFragmentFnName = "f_main"
-        rebuildPipelineWithCurrentView()
+        rebuildPipeline()
     }
 
-    // MARK: - Depth
+    func toggleDebugCamera() { useDebugCamera.toggle() }
+
     private func buildDepth() {
         let d = MTLDepthStencilDescriptor()
         d.depthCompareFunction = .less
@@ -189,7 +186,6 @@ final class Renderer: NSObject, MTKViewDelegate {
         depthState = device.makeDepthStencilState(descriptor: d)
     }
 
-    // MARK: - Skybox
     private func buildSkyboxPipeline(view: MTKView) {
         guard let lib = device.makeDefaultLibrary(),
               let v = lib.makeFunction(name: "skybox_v_main"),
@@ -209,14 +205,12 @@ final class Renderer: NSObject, MTKViewDelegate {
             print("❌ Pipeline skybox:", error.localizedDescription)
         }
 
-        // —> siempre pasa el depth test (pero no escribe)
         let d = MTLDepthStencilDescriptor()
         d.isDepthWriteEnabled   = false
-        d.depthCompareFunction  = .always
+        d.depthCompareFunction  = .lessEqual
         skyboxDepthState = device.makeDepthStencilState(descriptor: d)
     }
 
-    // MARK: - Assets
     private func loadMesh() {
         do {
             let loaded = try MeshLoader.loadOBJ(named: modelName,
@@ -270,11 +264,47 @@ final class Renderer: NSObject, MTKViewDelegate {
                                                                   subdir: "Sky",
                                                                   srgb: false,
                                                                   flipVertical: false)
-            if let t = skyboxTexture { print("✅ Skybox:", "\(t.width)x\(t.height)") }
+            if let t = skyboxTexture { print("✅ Skybox: \(t.width)x\(t.height)") }
         } catch {
             print("⚠️ Skybox:", error.localizedDescription)
             skyboxTexture = nil
         }
+    }
+
+    private func makePerspective(fovyRadians fovY: Float, aspect: Float,
+                                 near: Float, far: Float) -> simd_float4x4 {
+        let f = 1.0 / tanf(fovY * 0.5)
+        let nf = 1.0 / (near - far)
+        var m = simd_float4x4()
+        m.columns = (
+            SIMD4<Float>( f/aspect, 0, 0, 0),
+            SIMD4<Float>( 0, f, 0, 0),
+            SIMD4<Float>( 0, 0, (far+near)*nf, -1),
+            SIMD4<Float>( 0, 0, (2*far*near)*nf, 0)
+        )
+        return m
+    }
+
+    private func makeLookAt(eye: SIMD3<Float>, center: SIMD3<Float>, up: SIMD3<Float>) -> simd_float4x4 {
+        let f = simd_normalize(center - eye)
+        let s = simd_normalize(simd_cross(f, up))
+        let u = simd_cross(s, f)
+        var m = simd_float4x4()
+        m.columns = (
+            SIMD4<Float>( s.x,  u.x, -f.x, 0),
+            SIMD4<Float>( s.y,  u.y, -f.y, 0),
+            SIMD4<Float>( s.z,  u.z, -f.z, 0),
+            SIMD4<Float>(-simd_dot(s, eye),
+                         -simd_dot(u, eye),
+                          simd_dot(f, eye), 1)
+        )
+        return m
+    }
+
+    private func viewProjNoTranslation(view: simd_float4x4, proj: simd_float4x4) -> simd_float4x4 {
+        var v = view
+        v.columns.3 = .init(0, 0, 0, v.columns.3.w)
+        return proj * v
     }
 
     private func makeCheckerTexture(size: Int = 128, tile: Int = 16) -> MTLTexture {
@@ -298,43 +328,40 @@ final class Renderer: NSObject, MTKViewDelegate {
         return tex
     }
 
-    private func viewProjNoTranslation(view: simd_float4x4, proj: simd_float4x4) -> simd_float4x4 {
-        var v = view
-        v.columns.3 = .init(0, 0, 0, v.columns.3.w)
-        return proj * v
-    }
-
-    // MARK: - MTKViewDelegate
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
-        camera.aspect = Float(size.width / max(size.height, 1))
         cachedColorFormat = view.colorPixelFormat
         cachedDepthFormat = view.depthStencilPixelFormat
+        camera.aspect = Float(size.width / max(size.height, 1))
     }
 
     func draw(in view: MTKView) {
         guard let pass = view.currentRenderPassDescriptor,
               let drawable = view.currentDrawable else { return }
 
-        // Asegura aspect REAL cada frame
         let ds = view.drawableSize
-        let newAspect = Float(ds.width / max(1.0, ds.height))
-        if newAspect != camera.aspect { camera.aspect = newAspect }
+        let aspect = Float(ds.width / max(1.0, ds.height))
 
-        // Viewport explícito
-        let viewport = MTLViewport(originX: 0, originY: 0,
-                                   width: Double(ds.width),
-                                   height: Double(ds.height),
-                                   znear: 0.0, zfar: 1.0)
+        let vp = MTLViewport(originX: 0, originY: 0,
+                             width: Double(ds.width),
+                             height: Double(ds.height),
+                             znear: 0.0, zfar: 1.0)
 
         uniforms.model = .identity
-        uniforms.view  = camera.viewMatrix
-        uniforms.proj  = camera.projMatrix
+        if useDebugCamera {
+            uniforms.view = makeLookAt(eye: SIMD3<Float>(0, 0, 3),
+                                       center: SIMD3<Float>(0, 0, 0),
+                                       up: SIMD3<Float>(0, 1, 0))
+            uniforms.proj = makePerspective(fovyRadians: .pi/3, aspect: aspect, near: 0.01, far: 100)
+        } else {
+            camera.aspect = aspect
+            uniforms.view  = camera.viewMatrix
+            uniforms.proj  = camera.projMatrix
+        }
 
-        let cmd = commandQueue.makeCommandBuffer()!
-        let enc = cmd.makeRenderCommandEncoder(descriptor: pass)!
-        enc.setViewport(viewport)
+        guard let cmd = commandQueue.makeCommandBuffer(),
+              let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { return }
+        enc.setViewport(vp)
 
-        // 0) Skybox (sin culling, depth always)
         if let skyTex = skyboxTexture, let skyVB = skyboxVB, skyboxPipeline != nil {
             skyU.viewProjNoTrans = viewProjNoTranslation(view: uniforms.view, proj: uniforms.proj)
             enc.setRenderPipelineState(skyboxPipeline)
@@ -347,7 +374,6 @@ final class Renderer: NSObject, MTKViewDelegate {
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 36)
         }
 
-        // 1) Malla (sin culling para descartar winding como causa)
         if let mesh = mesh, let pipeline = pipeline, let depthState = depthState {
             enc.setRenderPipelineState(pipeline)
             enc.setDepthStencilState(depthState)
@@ -369,7 +395,7 @@ final class Renderer: NSObject, MTKViewDelegate {
                 printedIndexInfo = true
             }
 
-            for sub in mesh.submeshes {
+            for sub in mesh.submeshes where sub.indexCount > 0 {
                 enc.drawIndexedPrimitives(type: .triangle,
                                           indexCount: sub.indexCount,
                                           indexType: sub.indexType,
@@ -383,7 +409,6 @@ final class Renderer: NSObject, MTKViewDelegate {
         cmd.commit()
     }
 
-    // MARK: - Input
     func handleOrbit(delta: SIMD2<Float>) { camera.orbit(deltaYaw: delta.x * -0.5, deltaPitch: delta.y * 0.5) }
     func handleZoom(by scale: Float)      { camera.zoom(scale: scale) }
     func handlePan(delta: SIMD2<Float>)   { camera.pan(delta: delta * 80.0) }

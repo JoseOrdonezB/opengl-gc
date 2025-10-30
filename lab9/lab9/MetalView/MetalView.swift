@@ -11,18 +11,20 @@ import Cocoa
 
 final class GestureMTKView: MTKView {
 
+    // Callbacks hacia el renderer
     var onOrbit: ((SIMD2<Float>) -> Void)?
     var onPan:   ((SIMD2<Float>) -> Void)?
     var onZoom:  ((Float) -> Void)?
     var onKey:   ((Character) -> Void)?
 
-    private let orbitSensitivity:  Float = 0.01
-    private let panSensitivity:    Float = 0.0015
-    private let wheelPanScale:     Float = 0.8
+    // Sensibilidades
+    private let orbitSensitivity:  Float = 0.015
+    private let panSensitivity:    Float = 0.0035
 
     private var lastDragPoint: NSPoint = .zero
     private var draggingLeft  = false
     private var draggingMiddle = false
+    private var draggingRight = false
 
     override var acceptsFirstResponder: Bool { true }
 
@@ -39,12 +41,16 @@ final class GestureMTKView: MTKView {
 
     private func sharedSetup() {
         framebufferOnly = true
+        isPaused = false
+        enableSetNeedsDisplay = false
         preferredFramesPerSecond = 60
+
+        // Pinch para zoom
         let mag = NSMagnificationGestureRecognizer(target: self, action: #selector(handleMagnify(_:)))
         addGestureRecognizer(mag)
     }
 
-    // Teclado
+    // MARK: - Teclado
     override func keyDown(with event: NSEvent) {
         if let s = event.charactersIgnoringModifiers {
             for ch in s { onKey?(ch) }
@@ -53,7 +59,7 @@ final class GestureMTKView: MTKView {
         }
     }
 
-    // Ratón
+    // MARK: - Ratón
     override func mouseDown(with event: NSEvent) {
         draggingLeft = true
         lastDragPoint = convert(event.locationInWindow, from: nil)
@@ -61,10 +67,17 @@ final class GestureMTKView: MTKView {
     override func mouseUp(with event: NSEvent) { draggingLeft = false }
 
     override func otherMouseDown(with event: NSEvent) {
+        // Botón medio
         draggingMiddle = true
         lastDragPoint = convert(event.locationInWindow, from: nil)
     }
     override func otherMouseUp(with event: NSEvent) { draggingMiddle = false }
+
+    override func rightMouseDown(with event: NSEvent) {
+        draggingRight = true
+        lastDragPoint = convert(event.locationInWindow, from: nil)
+    }
+    override func rightMouseUp(with event: NSEvent) { draggingRight = false }
 
     override func mouseDragged(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
@@ -72,23 +85,38 @@ final class GestureMTKView: MTKView {
         let dy = Float(p.y - lastDragPoint.y)
         lastDragPoint = p
 
+        // Zoom arrastrando vertical con botón derecho (opcional)
+        if draggingRight {
+            let scale = exp(-dy * 0.01) // arriba acerca, abajo aleja
+            onZoom?(scale)
+            return
+        }
+
+        // Pan con botón medio o con Option (⌥)
         if draggingMiddle || event.modifierFlags.contains(.option) {
             onPan?(SIMD2<Float>(dx * panSensitivity, -dy * panSensitivity))
-        } else if draggingLeft {
+            return
+        }
+
+        // Orbit con botón izquierdo
+        if draggingLeft {
             onOrbit?(SIMD2<Float>(dx * orbitSensitivity, dy * orbitSensitivity))
         }
     }
 
+    // Scroll = ZOOM (dos dedos en trackpad o rueda)
     override func scrollWheel(with event: NSEvent) {
-        let sx = Float(event.hasPreciseScrollingDeltas ? event.scrollingDeltaX : event.scrollingDeltaX * 0.1)
-        let sy = Float(event.hasPreciseScrollingDeltas ? event.scrollingDeltaY : event.scrollingDeltaY * 0.1)
-        onPan?(SIMD2<Float>(sx * wheelPanScale * panSensitivity,
-                            -sy * wheelPanScale * panSensitivity))
+        // Usa deltaY (vertical). Si es “precise”, viene en valores finos.
+        let dy = Float(event.hasPreciseScrollingDeltas ? event.scrollingDeltaY
+                                                       : event.scrollingDeltaY * 0.1)
+        // Exponencial suave: >1 acerca, <1 aleja
+        let scale = exp(-dy * 0.01) // invertir signo para que “arriba” acerque
+        onZoom?(scale)
     }
 
     @objc private func handleMagnify(_ g: NSMagnificationGestureRecognizer) {
-        let k: Float = 1.0 - Float(g.magnification)
-        let scale = max(0.2, min(5.0, k))
+        // g.magnification ~ delta, 0 = sin cambio
+        let scale = max(0.2, min(5.0, 1.0 - Float(g.magnification)))
         onZoom?(scale)
     }
 }
@@ -106,30 +134,41 @@ struct MetalView: NSViewRepresentable {
         view.enableSetNeedsDisplay = false
         view.preferredFramesPerSecond = 60
 
-        // Crear y RETENER el renderer
         guard let renderer = Renderer(mtkView: view) else {
             assertionFailure("No se pudo crear Renderer(mtkView:)")
             return view
         }
-        context.coordinator.renderer = renderer   // ← retención fuerte
-        view.delegate = renderer                  // MTKView.delegate es weak
 
-        // Gestos
+        // Mantener referencia FUERTE al renderer en el coordinator
+        context.coordinator.renderer = renderer
+
+        // delegate es weak → si no retenemos renderer, no dibuja
+        view.delegate = renderer
+
+        // Gestos → renderer
         view.onOrbit = { [weak renderer] delta in renderer?.handleOrbit(delta: delta) }
         view.onPan   = { [weak renderer] delta in renderer?.handlePan(delta: delta) }
         view.onZoom  = { [weak renderer] scale in renderer?.handleZoom(by: scale) }
 
-        // Teclado: 1 = vertex creativo, 2 = fragment creativo, 0 = reset
-        view.onKey   = { [weak renderer] ch in
+        // Teclas:
+        // 1 = f_metal, 2 = f_toon_rim, 3 = f_matcap_solid
+        // v = v_creative, b = v_main, 0 = reset
+        view.onKey = { [weak renderer] ch in
             switch ch {
-            case "1": renderer?.selectVertexShader(index: 1)
-            case "2": renderer?.selectFragmentShader(index: 1)
+            case "1": renderer?.selectFragmentShader(index: 1)
+            case "2": renderer?.selectFragmentShader(index: 2)
+            case "3": renderer?.selectFragmentShader(index: 3)
+            case "4": renderer?.selectVertexShader(index: 1)
+            case "5": renderer?.selectVertexShader(index: 2)
+            case "6": renderer?.selectVertexShader(index: 3)
+            case "v", "V": renderer?.selectVertexShader(index: 1)
+            case "b", "B": renderer?.selectVertexShader(index: 0)
             case "0": renderer?.resetShadersToDefault()
             default: break
             }
         }
 
-        // Dar foco para recibir teclado
+        // Foco de teclado
         DispatchQueue.main.async {
             view.window?.makeFirstResponder(view)
         }
@@ -144,7 +183,7 @@ struct MetalView: NSViewRepresentable {
     }
 
     final class Coordinator {
-        // ⭐️ Retén el renderer FUERTEMENTE (sin `weak`)
+        // FUERTE, no weak
         var renderer: Renderer?
     }
 }

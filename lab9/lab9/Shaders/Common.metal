@@ -11,7 +11,6 @@
 #include <metal_stdlib>
 using namespace metal;
 
-// ===== Ajustes globales (puedes sobreescribirlos con -D en el build o antes del include) =====
 #ifndef FLIP_V
 #define FLIP_V             1
 #endif
@@ -34,7 +33,6 @@ using namespace metal;
 #define USE_NORMAL_MATRIX  1
 #endif
 
-// ===== Layout compartido (coincide con tu struct en Swift) =====
 struct VertexIn {
     float3 position [[attribute(0)]];
     float3 normal   [[attribute(1)]];
@@ -47,19 +45,18 @@ struct Uniforms {
     float4x4 proj;
     float3   lightDir;
     float    ambient;
-    // (Opcional pero recomendado) deja explícito el bloque de 16 bytes:
-    // esto no cambia el layout efectivo si tu lado Swift ya está alineado a 16 bytes.
-    // float _pad[3];
+    float time;
+    float3 _pad0;
 };
 
 struct Varyings {
     float4 position [[position]];
     float3 normalWS;
     float2 uv;
+    float3 normalVS;
+    float3 viewDirVS;
 };
 
-// ===== Helpers =====
-// Marcados como unused para evitar warnings cuando un TU no los use.
 static inline __attribute__((unused))
 float2 fixUV(float2 uv) {
 #if SWAP_UV
@@ -74,7 +71,6 @@ float2 fixUV(float2 uv) {
     return uv;
 }
 
-// Inversa 3x3 (column-major)
 static inline __attribute__((unused))
 float3x3 inverse3x3(float3x3 m) {
     float a=m[0][0], b=m[0][1], c=m[0][2];
@@ -95,4 +91,4 @@ float3x3 inverse3x3(float3x3 m) {
                     float3(G,H,I)*invDet);
 }
 
-#endif /* COMMON_METAL_INCLUDED */
+#endif // COMMON_METAL_INCLUDED
