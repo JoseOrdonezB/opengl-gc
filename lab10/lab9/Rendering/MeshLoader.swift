@@ -22,7 +22,10 @@ enum MeshLoader {
     static func loadOBJ(named name: String,
                         subdir: String?,
                         device: MTLDevice,
-                        flipVTexcoords: Bool = false) throws -> LoadedModel {
+                        flipVTexcoords: Bool = false,
+                        targetExtent: Float = 1.5,
+                        recenter: Bool = true,
+                        generateTangents: Bool = false) throws -> LoadedModel {
 
         let allocator = MTKMeshBufferAllocator(device: device)
         let mtlVDReq  = makeMTLVertexDescriptor()
@@ -45,7 +48,15 @@ enum MeshLoader {
 
         if flipVTexcoords { flipTexcoordV(in: mdlMesh) }
 
-        centerAndScale(mdlMesh: mdlMesh, targetExtent: 1.5)
+        if recenter { centerAndScale(mdlMesh: mdlMesh, targetExtent: targetExtent) }
+
+        if generateTangents {
+            mdlMesh.addOrthTanBasis(
+                forTextureCoordinateAttributeNamed: MDLVertexAttributeTextureCoordinate,
+                normalAttributeNamed: MDLVertexAttributeNormal,
+                tangentAttributeNamed: MDLVertexAttributeTangent
+            )
+        }
 
         let mtk = try MTKMesh(mesh: mdlMesh, device: device)
 
@@ -56,20 +67,22 @@ enum MeshLoader {
 
     private static func makeMTLVertexDescriptor() -> MTLVertexDescriptor {
         let vd = MTLVertexDescriptor()
+        // position
         vd.attributes[0].format = .float3
         vd.attributes[0].offset = 0
         vd.attributes[0].bufferIndex = 0
-
+        // normal
         vd.attributes[1].format = .float3
         vd.attributes[1].offset = MemoryLayout<SIMD3<Float>>.stride
         vd.attributes[1].bufferIndex = 0
-
+        // uv
         vd.attributes[2].format = .float2
         vd.attributes[2].offset = MemoryLayout<SIMD3<Float>>.stride * 2
         vd.attributes[2].bufferIndex = 0
 
         vd.layouts[0].stride = MemoryLayout<SIMD3<Float>>.stride * 2 + MemoryLayout<SIMD2<Float>>.stride
         vd.layouts[0].stepFunction = .perVertex
+        vd.layouts[0].stepRate = 1
         return vd
     }
 
@@ -97,8 +110,8 @@ enum MeshLoader {
         let stride = pos.stride
         let base   = pos.dataStart
 
-        var minV = SIMD3<Float>( repeating: .infinity)
-        var maxV = SIMD3<Float>( repeating: -.infinity)
+        var minV = SIMD3<Float>(repeating: .infinity)
+        var maxV = SIMD3<Float>(repeating: -.infinity)
 
         for i in 0..<count {
             let p = base.advanced(by: i * stride).assumingMemoryBound(to: SIMD3<Float>.self).pointee

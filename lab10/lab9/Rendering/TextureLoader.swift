@@ -36,7 +36,6 @@ enum TextureLoaderBMP {
         var options: [MTKTextureLoader.Option: Any] = [
             .SRGB: srgb as NSNumber,
             .generateMipmaps: true as NSNumber,
-            .allocateMipmaps: true as NSNumber,
             .textureUsage: NSNumber(value: MTLTextureUsage.shaderRead.rawValue)
         ]
         if flipVertical {
@@ -53,5 +52,26 @@ enum TextureLoaderBMP {
         } else {
             return try loader.newTexture(URL: url, options: options)
         }
+    }
+}
+
+extension TextureLoaderBMP {
+    static func loadAny(baseName: String,
+                        subdir: String? = nil,
+                        device: MTLDevice,
+                        srgb: Bool = true,
+                        flipVertical: Bool = false,
+                        preferredExts: [String] = ["bmp","png","jpg","jpeg","tga"]) -> MTLTexture? {
+
+        for ext in preferredExts {
+            if let url = Bundle.main.url(forResource: baseName, withExtension: ext, subdirectory: subdir) {
+                do {
+                    return try loadTexture(from: url, device: device, srgb: srgb, flipVertical: flipVertical)
+                } catch {
+                    continue
+                }
+            }
+        }
+        return nil
     }
 }

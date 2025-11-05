@@ -11,6 +11,23 @@ import MetalKit
 import simd
 import QuartzCore
 
+struct ModelAsset {
+    let name: String
+    let subdir: String
+    let textureBaseName: String?
+    let preRotateDegXYZ: SIMD3<Float>
+
+    init(name: String,
+         subdir: String,
+         textureBaseName: String?,
+         preRotateDegXYZ: SIMD3<Float> = .zero) {
+        self.name = name
+        self.subdir = subdir
+        self.textureBaseName = textureBaseName
+        self.preRotateDegXYZ = preRotateDegXYZ
+    }
+}
+
 final class Renderer: NSObject, MTKViewDelegate {
 
     private let device: MTLDevice
@@ -28,8 +45,30 @@ final class Renderer: NSObject, MTKViewDelegate {
     private var currentVertexFnName: String   = "v_main"
     private var currentFragmentFnName: String = "f_main"
 
-    private let modelName   = "luigidoll"
-    private let modelSubdir = "Models"
+    private var models: [ModelAsset] = [
+        ModelAsset(name: "luigidoll",
+                   subdir: "Resources/Models",
+                   textureBaseName: "7c33ed83",
+                   preRotateDegXYZ: SIMD3<Float>(0, 180, 0)),
+
+        ModelAsset(name: "13463_Australian_Cattle_Dog_v3",
+                   subdir: "Resources/Models",
+                   textureBaseName: "Australian_Cattle_Dog_dif",
+                   preRotateDegXYZ: SIMD3<Float>(90, 180, 0)),
+
+        ModelAsset(name: "12222_Cat_v1_l3",
+                   subdir: "Resources/Models",
+                   textureBaseName: "Cat_diffuse",
+                   preRotateDegXYZ: SIMD3<Float>(90, 180, 0))
+    ]
+    private var currentModelIndex: Int = 0
+
+    private struct Cached {
+        let mesh: MTKMesh
+        let vdesc: MTLVertexDescriptor
+        let texture: MTLTexture
+    }
+    private var cache: [Int: Cached] = [:]
 
     let camera = OrbitCamera()
     private var useDebugCamera = false
@@ -92,6 +131,8 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     private var lastFrameTime: CFTimeInterval = CACurrentMediaTime()
 
+    private var preModelTransform: simd_float4x4 = .identity
+
     init?(mtkView: MTKView) {
         if mtkView.device == nil { mtkView.device = MTLCreateSystemDefaultDevice() }
         guard let dev = mtkView.device, let q = dev.makeCommandQueue() else { return nil }
@@ -109,19 +150,90 @@ final class Renderer: NSObject, MTKViewDelegate {
         let ds = mtkView.drawableSize
         camera.aspect = Float(ds.width / max(1.0, ds.height))
 
-        loadMesh()
-        buildMeshPipeline()
         buildDepth()
-        loadBMPTexture()
         buildSkyboxPipeline(view: mtkView)
         loadSkybox()
 
+        loadCurrentModelAssets()
+
         if let m = mesh {
-            print("ℹ️ Mesh: \(m.vertexBuffers.count) vertexBuffers, \(m.submeshes.count) submeshes")
-            for (i, vb) in m.vertexBuffers.enumerated() {
-                print("   • VB[\(i)]: length=\(vb.buffer.length) offset=\(vb.offset)")
+            print("ℹ️ Mesh: \(m.vertexBuffers.count) VBs, \(m.submeshes.count) submeshes")
+        }
+    }
+
+    func selectModel(index: Int) {
+        guard !models.isEmpty else { return }
+        let clamped = max(0, min(index, models.count - 1))
+        guard clamped != currentModelIndex else { return }
+        currentModelIndex = clamped
+        loadCurrentModelAssets()
+    }
+    func nextModel() { selectModel(index: currentModelIndex + 1) }
+    func prevModel() { selectModel(index: currentModelIndex - 1) }
+
+    private func loadCurrentModelAssets() {
+        let idx = currentModelIndex
+        let asset = models[idx]
+
+        if let c = cache[idx] {
+            mesh = c.mesh
+            modelVertexDescriptor = c.vdesc
+            baseTexture = c.texture
+            preModelTransform = rotXYZ(deg: asset.preRotateDegXYZ)
+            buildMeshPipeline()
+            printedIndexInfo = false
+            print("✅ Modelo (cache): \(asset.name)")
+            return
+        }
+
+        do {
+            let loaded = try MeshLoader.loadOBJ(named: asset.name,
+                                                subdir: asset.subdir,
+                                                device: device,
+                                                flipVTexcoords: false)
+            mesh = loaded.mtk
+            modelVertexDescriptor = loaded.mtlVertexDescriptor
+
+            baseTexture = loadModelTexture(baseName: asset.textureBaseName ?? asset.name,
+                                           preferredSubdir: asset.subdir)
+                          ?? makeCheckerTexture()
+
+            preModelTransform = rotXYZ(deg: asset.preRotateDegXYZ)
+
+            buildMeshPipeline()
+            printedIndexInfo = false
+
+            if let tex = baseTexture {
+                cache[idx] = .init(mesh: loaded.mtk, vdesc: loaded.mtlVertexDescriptor, texture: tex)
+            }
+
+            print("✅ Modelo activo: \(asset.name)")
+        } catch {
+            print("❌ Error cargando modelo \(asset.name):", error.localizedDescription)
+            mesh = nil
+            baseTexture = makeCheckerTexture()
+            preModelTransform = .identity
+        }
+    }
+
+    private func loadModelTexture(baseName: String, preferredSubdir: String?) -> MTLTexture? {
+        let subdirs: [String?] = Array(
+            [preferredSubdir, "Resources/Models", "Models", nil]
+                .reduce(into: LinkedHashSet<String?>()) { $0.insert($1) }
+        )
+        for sd in subdirs {
+            if let tex = TextureLoaderBMP.loadAny(baseName: baseName,
+                                                 subdir: sd,
+                                                 device: device,
+                                                 srgb: true,
+                                                 flipVertical: false,
+                                                 preferredExts: ["bmp","png","jpg","jpeg","tga"]) {
+                print("✅ Textura modelo: \(baseName) en \(sd ?? "(bundle root)")")
+                return tex
             }
         }
+        print("⚠️ No se encontró textura para \(baseName). Usando checker.")
+        return nil
     }
 
     private func buildMeshPipeline() { rebuildPipeline() }
@@ -226,39 +338,6 @@ final class Renderer: NSObject, MTKViewDelegate {
         skyboxDepthState = device.makeDepthStencilState(descriptor: d)
     }
 
-    private func loadMesh() {
-        do {
-            let loaded = try MeshLoader.loadOBJ(named: modelName,
-                                                subdir: modelSubdir,
-                                                device: device,
-                                                flipVTexcoords: false)
-            mesh = loaded.mtk
-            modelVertexDescriptor = loaded.mtlVertexDescriptor
-        } catch {
-            print("❌ OBJ:", error.localizedDescription)
-        }
-    }
-
-    private func loadBMPTexture() {
-        let flip = false
-        if let url = Bundle.main.url(forResource: modelName, withExtension: "bmp", subdirectory: modelSubdir),
-           let tex = try? TextureLoaderBMP.loadTexture(from: url, device: device, srgb: true, flipVertical: flip) {
-            baseTexture = tex; print("✅ BMP:", url.lastPathComponent, "\(tex.width)x\(tex.height)"); return
-        }
-        if let urls = Bundle.main.urls(forResourcesWithExtension: "bmp", subdirectory: modelSubdir),
-           let url = urls.first,
-           let tex = try? TextureLoaderBMP.loadTexture(from: url, device: device, srgb: true, flipVertical: flip) {
-            baseTexture = tex; print("✅ BMP:", url.lastPathComponent, "\(tex.width)x\(tex.height)"); return
-        }
-        if let urls = Bundle.main.urls(forResourcesWithExtension: "bmp", subdirectory: nil),
-           let url = urls.first,
-           let tex = try? TextureLoaderBMP.loadTexture(from: url, device: device, srgb: true, flipVertical: flip) {
-            baseTexture = tex; print("✅ BMP:", url.lastPathComponent, "\(tex.width)x\(tex.height)"); return
-        }
-        baseTexture = makeCheckerTexture()
-        print("⚠️ BMP no encontrada. Usando checker.")
-    }
-
     private func loadSkybox() {
         let verts: [SIMD3<Float>] = [
             [ 1,-1,-1],[ 1,-1, 1],[ 1, 1, 1],[ 1,-1,-1],[ 1, 1, 1],[ 1, 1,-1],
@@ -272,18 +351,63 @@ final class Renderer: NSObject, MTKViewDelegate {
                                      length: verts.count * MemoryLayout<SIMD3<Float>>.stride,
                                      options: .storageModeShared)
 
-        do {
-            skyboxTexture = try SkyboxLoader.loadCubeTextureSmart(device: device,
+        let subdirs: [String] = ["Sky", "Resources/Sky", ""]
+        let exts:    [String] = ["jpg", "png", "jpeg"]
+
+        for sd in subdirs {
+            for ext in exts {
+                do {
+                    let t = try SkyboxLoader.loadCubeTextureSmart(device: device,
                                                                   base: "sky_",
-                                                                  ext: "jpg",
-                                                                  subdir: "Sky",
+                                                                  ext: ext,
+                                                                  subdir: sd.isEmpty ? nil : sd,
                                                                   srgb: false,
                                                                   flipVertical: false)
-            if let t = skyboxTexture { print("✅ Skybox: \(t.width)x\(t.height)") }
-        } catch {
-            print("⚠️ Skybox:", error.localizedDescription)
-            skyboxTexture = nil
+                    skyboxTexture = t
+                    print("✅ Skybox: \(t.width)x\(t.height) en \(sd.isEmpty ? "(bundle root)" : sd) .\(ext)")
+                    return
+                } catch {
+                    
+                }
+            }
         }
+        print("⚠️ No se encontró skybox (probé \(subdirs) con \(exts)).")
+        skyboxTexture = nil
+    }
+
+
+    @inline(__always) private func deg2rad(_ d: Float) -> Float { d * .pi / 180 }
+    private func rotX(_ r: Float) -> simd_float4x4 {
+        let c = cos(r), s = sin(r)
+        return .init(columns: (
+            .init(1, 0, 0, 0),
+            .init(0, c,-s, 0),
+            .init(0, s, c, 0),
+            .init(0, 0, 0, 1)
+        ))
+    }
+    private func rotY(_ r: Float) -> simd_float4x4 {
+        let c = cos(r), s = sin(r)
+        return .init(columns: (
+            .init( c, 0, s, 0),
+            .init( 0, 1, 0, 0),
+            .init(-s, 0, c, 0),
+            .init( 0, 0, 0, 1)
+        ))
+    }
+    private func rotZ(_ r: Float) -> simd_float4x4 {
+        let c = cos(r), s = sin(r)
+        return .init(columns: (
+            .init( c,-s, 0, 0),
+            .init( s, c, 0, 0),
+            .init( 0, 0, 1, 0),
+            .init( 0, 0, 0, 1)
+        ))
+    }
+    private func rotXYZ(deg: SIMD3<Float>) -> simd_float4x4 {
+        let r = SIMD3<Float>(deg2rad(deg.x), deg2rad(deg.y), deg2rad(deg.z))
+
+        return rotZ(r.z) * rotY(r.y) * rotX(r.x)
     }
 
     private func makePerspective(fovyRadians fovY: Float, aspect: Float,
@@ -366,7 +490,8 @@ final class Renderer: NSObject, MTKViewDelegate {
                              height: Double(ds.height),
                              znear: 0.0, zfar: 1.0)
 
-        uniforms.model = .identity
+        uniforms.model = preModelTransform
+
         if useDebugCamera {
             uniforms.view = makeLookAt(eye: SIMD3<Float>(0, 0, 3),
                                        center: SIMD3<Float>(0, 0, 0),
@@ -429,9 +554,11 @@ final class Renderer: NSObject, MTKViewDelegate {
         cmd.commit()
     }
 
+
     func handleOrbit(delta: SIMD2<Float>) { camera.orbit(deltaYaw: delta.x * -0.5, deltaPitch: delta.y * 0.5) }
     func handleZoom(by scale: Float)      { camera.zoom(scale: scale) }
     func handlePan(delta: SIMD2<Float>)   { camera.pan(delta: delta * 80.0) }
+
 }
 
 extension Renderer {
@@ -474,4 +601,11 @@ extension Renderer {
         lastFrameTime = now
         return max(dt, 1.0/600.0)
     }
+}
+
+fileprivate struct LinkedHashSet<T: Hashable>: Sequence {
+    private var array: [T] = []
+    private var set: Set<T> = []
+    mutating func insert(_ element: T) { if set.insert(element).inserted { array.append(element) } }
+    func makeIterator() -> IndexingIterator<[T]> { array.makeIterator() }
 }

@@ -66,13 +66,11 @@ final class GestureMTKView: MTKView {
     }
 
     private func handleKey(_ event: NSEvent, isDown: Bool) {
-
         switch event.keyCode {
-
         case 0:   onKeyChange?(.left,  isDown)
         case 2:   onKeyChange?(.right, isDown)
-        case 13:  onKeyChange?(.down,    isDown)
-        case 1:   onKeyChange?(.up,  isDown)
+        case 13:  onKeyChange?(.down,  isDown)
+        case 1:   onKeyChange?(.up,    isDown)
 
         case 12: onKeyChange?(.zoomIn,  isDown)
         case 14: onKeyChange?(.zoomOut, isDown)
@@ -154,7 +152,6 @@ struct MetalView: NSViewRepresentable {
         }
 
         context.coordinator.renderer = renderer
-
         view.delegate = renderer
 
         view.onOrbit = { [weak renderer] delta in renderer?.handleOrbit(delta: delta) }
@@ -176,6 +173,11 @@ struct MetalView: NSViewRepresentable {
             case "v", "V": renderer?.selectVertexShader(index: 1)
             case "b", "B": renderer?.selectVertexShader(index: 0)
             case "0": renderer?.resetShadersToDefault()
+
+            case "j", "J": renderer?.selectModel(index: 0)
+            case "k", "K": renderer?.selectModel(index: 1)
+            case "l", "L": renderer?.selectModel(index: 2)
+
             default: break
             }
         }
