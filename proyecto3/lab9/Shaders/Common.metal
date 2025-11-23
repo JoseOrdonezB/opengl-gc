@@ -45,9 +45,11 @@ struct Uniforms {
     float4x4 proj;
     float3   lightDir;
     float    ambient;
-    float time;
-    float3 _pad0;
+    float    time;
+    float    modelIndex;
+    float2   _pad0;
 };
+
 
 struct Varyings {
     float4 position [[position]];

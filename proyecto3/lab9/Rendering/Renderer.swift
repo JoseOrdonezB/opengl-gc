@@ -1,3 +1,10 @@
+//
+//  Renderer.swift
+//  lab9
+//
+//  Created by Jose Ordoñez on 24/10/25.
+//
+
 import Foundation
 import Metal
 import MetalKit
@@ -43,7 +50,9 @@ final class Renderer: NSObject, MTKViewDelegate {
     private var currentVertexFnName: String   = "v_main"
     private var currentFragmentFnName: String = "f_main"
 
-    private var models: [ModelAsset] = [
+    private var shadersEnabled = false
+
+    private let models: [ModelAsset] = [
         ModelAsset(
             name: "Bamboo_Shoots",
             subdir: "Resources/Models",
@@ -129,13 +138,20 @@ final class Renderer: NSObject, MTKViewDelegate {
         var proj:     simd_float4x4
         var lightDir: SIMD3<Float>
         var ambient:  Float
-        var _pad0: SIMD4<Float> = .zero
+        var time:     Float
+        var modelIndex: Float
+        var _pad0:    SIMD2<Float> = .zero
     }
-    private var uniforms = Uniforms(model: .identity,
-                                    view:  .identity,
-                                    proj:  .identity,
-                                    lightDir: simd_normalize(SIMD3<Float>(-1, -1, -0.5)),
-                                    ambient: 0.9)
+
+    private var uniforms = Uniforms(
+        model: .identity,
+        view:  .identity,
+        proj:  .identity,
+        lightDir: simd_normalize(SIMD3<Float>(-1, -1, -0.5)),
+        ambient: 0.9,
+        time: 0,
+        modelIndex: 0
+    )
 
     struct SkyboxUniforms { var viewProjNoTrans: simd_float4x4 }
     private var skyU = SkyboxUniforms(viewProjNoTrans: .identity)
@@ -179,6 +195,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
     }
 
+
     @discardableResult
     private func loadModelIfNeeded(index idx: Int) -> Cached? {
         let asset = models[idx]
@@ -188,10 +205,12 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
 
         do {
-            let loaded = try MeshLoader.loadOBJ(named: asset.name,
-                                                subdir: asset.subdir,
-                                                device: device,
-                                                flipVTexcoords: false)
+            let loaded = try MeshLoader.loadOBJ(
+                named: asset.name,
+                subdir: asset.subdir,
+                device: device,
+                flipVTexcoords: false
+            )
 
             let tex = loadModelTexture(baseName: asset.textureBaseName ?? asset.name,
                                        preferredSubdir: asset.subdir)
@@ -199,10 +218,12 @@ final class Renderer: NSObject, MTKViewDelegate {
 
             let pre = rotXYZ(deg: asset.preRotateDegXYZ)
 
-            let cached = Cached(mesh: loaded.mtk,
-                                vdesc: loaded.mtlVertexDescriptor,
-                                texture: tex,
-                                preTransform: pre)
+            let cached = Cached(
+                mesh: loaded.mtk,
+                vdesc: loaded.mtlVertexDescriptor,
+                texture: tex,
+                preTransform: pre
+            )
             cache[idx] = cached
 
             if modelVertexDescriptor == nil {
@@ -222,17 +243,20 @@ final class Renderer: NSObject, MTKViewDelegate {
                 .reduce(into: LinkedHashSet<String?>()) { $0.insert($1) }
         )
         for sd in subdirs {
-            if let tex = TextureLoaderBMP.loadAny(baseName: baseName,
-                                                 subdir: sd,
-                                                 device: device,
-                                                 srgb: true,
-                                                 flipVertical: false,
-                                                 preferredExts: ["bmp","png","jpg","jpeg","tga"]) {
+            if let tex = TextureLoaderBMP.loadAny(
+                baseName: baseName,
+                subdir: sd,
+                device: device,
+                srgb: true,
+                flipVertical: false,
+                preferredExts: ["bmp","png","jpg","jpeg","tga"]
+            ) {
                 return tex
             }
         }
         return nil
     }
+
 
     private func buildMeshPipeline() { rebuildPipeline() }
 
@@ -264,30 +288,23 @@ final class Renderer: NSObject, MTKViewDelegate {
             pipeline = nil
         }
     }
-
-    func selectVertexShader(index: Int) {
-        switch index {
-        case 1: currentVertexFnName = "v_noise_deform"
-        case 2: currentVertexFnName = "v_thin_shrink"
-        case 3: currentVertexFnName = "v_twist_y"
-        default: currentVertexFnName = "v_main"
-        }
-        rebuildPipeline()
-    }
-
-    func selectFragmentShader(index: Int) {
-        switch index {
-        case 1: currentFragmentFnName = "f_metal"
-        case 2: currentFragmentFnName = "f_toon_rim"
-        case 3: currentFragmentFnName = "f_matcap_solid"
-        default: currentFragmentFnName = "f_main"
-        }
-        rebuildPipeline()
-    }
-
+    
     func resetShadersToDefault() {
+        shadersEnabled = false
         currentVertexFnName   = "v_main"
         currentFragmentFnName = "f_main"
+        rebuildPipeline()
+    }
+
+    func toggleShaders() {
+        shadersEnabled.toggle()
+        if shadersEnabled {
+            currentVertexFnName   = "v_party_mix"
+            currentFragmentFnName = "f_party_mix"
+        } else {
+            currentVertexFnName   = "v_main"
+            currentFragmentFnName = "f_main"
+        }
         rebuildPipeline()
     }
 
@@ -300,6 +317,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             activeCameraPreset = nil
         }
     }
+
 
     private func buildDepth() {
         let d = MTLDepthStencilDescriptor()
@@ -341,9 +359,11 @@ final class Renderer: NSObject, MTKViewDelegate {
             [ 1,-1, 1],[-1,-1, 1],[-1, 1, 1],[ 1,-1, 1],[-1, 1, 1],[ 1, 1, 1],
             [-1,-1,-1],[ 1,-1,-1],[ 1, 1,-1],[-1,-1,-1],[ 1, 1,-1],[-1, 1,-1],
         ]
-        skyboxVB = device.makeBuffer(bytes: verts,
-                                     length: verts.count * MemoryLayout<SIMD3<Float>>.stride,
-                                     options: .storageModeShared)
+        skyboxVB = device.makeBuffer(
+            bytes: verts,
+            length: verts.count * MemoryLayout<SIMD3<Float>>.stride,
+            options: .storageModeShared
+        )
 
         let subdirs: [String] = ["Sky", "Resources/Sky", ""]
         let exts:    [String] = ["jpg", "png", "jpeg"]
@@ -351,12 +371,14 @@ final class Renderer: NSObject, MTKViewDelegate {
         for sd in subdirs {
             for ext in exts {
                 do {
-                    let t = try SkyboxLoader.loadCubeTextureSmart(device: device,
-                                                                  base: "sky_",
-                                                                  ext: ext,
-                                                                  subdir: sd.isEmpty ? nil : sd,
-                                                                  srgb: false,
-                                                                  flipVertical: false)
+                    let t = try SkyboxLoader.loadCubeTextureSmart(
+                        device: device,
+                        base: "sky_",
+                        ext: ext,
+                        subdir: sd.isEmpty ? nil : sd,
+                        srgb: false,
+                        flipVertical: false
+                    )
                     skyboxTexture = t
                     return
                 } catch { }
@@ -435,8 +457,11 @@ final class Renderer: NSObject, MTKViewDelegate {
     }
 
     private func makeCheckerTexture(size: Int = 128, tile: Int = 16) -> MTLTexture {
-        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm,
-                                                            width: size, height: size, mipmapped: false)
+        let desc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm,
+            width: size, height: size,
+            mipmapped: false
+        )
         desc.usage = .shaderRead
         let tex = device.makeTexture(descriptor: desc)!
         var pixels = [UInt8](repeating: 0, count: size * size * 4)
@@ -445,12 +470,19 @@ final class Renderer: NSObject, MTKViewDelegate {
                 let on = ((x / tile) + (y / tile)) % 2 == 0
                 let c: UInt8 = on ? 230 : 30
                 let i = (y * size + x) * 4
-                pixels[i+0] = c; pixels[i+1] = c; pixels[i+2] = c; pixels[i+3] = 255
+                pixels[i+0] = c
+                pixels[i+1] = c
+                pixels[i+2] = c
+                pixels[i+3] = 255
             }
         }
         pixels.withUnsafeBytes {
-            tex.replace(region: MTLRegionMake2D(0, 0, size, size),
-                        mipmapLevel: 0, withBytes: $0.baseAddress!, bytesPerRow: size * 4)
+            tex.replace(
+                region: MTLRegionMake2D(0, 0, size, size),
+                mipmapLevel: 0,
+                withBytes: $0.baseAddress!,
+                bytesPerRow: size * 4
+            )
         }
         return tex
     }
@@ -466,6 +498,8 @@ final class Renderer: NSObject, MTKViewDelegate {
               let drawable = view.currentDrawable else { return }
 
         let dt = tickDT()
+        uniforms.time += dt
+
         if !useDebugCamera {
             updateCameraFromKeyboard(dt: dt)
         }
@@ -473,10 +507,12 @@ final class Renderer: NSObject, MTKViewDelegate {
         let ds = view.drawableSize
         let aspect = Float(ds.width / max(1.0, ds.height))
 
-        let vp = MTLViewport(originX: 0, originY: 0,
-                             width: Double(ds.width),
-                             height: Double(ds.height),
-                             znear: 0.0, zfar: 1.0)
+        let vp = MTLViewport(
+            originX: 0, originY: 0,
+            width: Double(ds.width),
+            height: Double(ds.height),
+            znear: 0.0, zfar: 1.0
+        )
 
         if let preset = activeCameraPreset,
            preset >= 0, preset < models.count {
@@ -488,43 +524,46 @@ final class Renderer: NSObject, MTKViewDelegate {
             case 0:
                 target = m.position + SIMD3<Float>(0, 0.6, 0)
                 eye    = target + SIMD3<Float>(0.0, 0.8, 2.2)
-
             case 1:
                 target = m.position + SIMD3<Float>(0, 0.6, 0)
                 eye    = target + SIMD3<Float>(0.3, 0.7, 2.0)
-
             case 2:
                 target = m.position + SIMD3<Float>(0, 0.6, 0)
                 eye    = target + SIMD3<Float>(-0.3, 0.7, 2.0)
-
             case 3:
                 target = m.position + SIMD3<Float>(0, 0.7, 0)
                 eye    = target + SIMD3<Float>(0.0, 0.8, -3)
-
             case 4:
                 target = m.position + SIMD3<Float>(-2, 0.5, -1.5)
                 eye    = target + SIMD3<Float>(-2.5, 2.5, -2.5)
-
             default:
                 target = m.position
                 eye    = target + SIMD3<Float>(0, 1.5, 3)
             }
 
-            uniforms.view = makeLookAt(eye: eye,
-                                       center: target,
-                                       up: SIMD3<Float>(0, 1, 0))
-            uniforms.proj = makePerspective(fovyRadians: .pi/3,
-                                            aspect: aspect,
-                                            near: 0.01,
-                                            far: 100)
+            uniforms.view = makeLookAt(
+                eye: eye,
+                center: target,
+                up: SIMD3<Float>(0, 1, 0)
+            )
+            uniforms.proj = makePerspective(
+                fovyRadians: .pi/3,
+                aspect: aspect,
+                near: 0.01,
+                far: 100
+            )
         } else if useDebugCamera {
-            uniforms.view = makeLookAt(eye: SIMD3<Float>(0, 0, 3),
-                                       center: SIMD3<Float>(0, 0, 0),
-                                       up: SIMD3<Float>(0, 1, 0))
-            uniforms.proj = makePerspective(fovyRadians: .pi/3,
-                                            aspect: aspect,
-                                            near: 0.01,
-                                            far: 100)
+            uniforms.view = makeLookAt(
+                eye: SIMD3<Float>(0, 0, 3),
+                center: SIMD3<Float>(0, 0, 0),
+                up: SIMD3<Float>(0, 1, 0)
+            )
+            uniforms.proj = makePerspective(
+                fovyRadians: .pi/3,
+                aspect: aspect,
+                near: 0.01,
+                far: 100
+            )
         } else {
             camera.aspect = aspect
             uniforms.view  = camera.viewMatrix
@@ -535,8 +574,13 @@ final class Renderer: NSObject, MTKViewDelegate {
               let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { return }
         enc.setViewport(vp)
 
-        if let skyTex = skyboxTexture, let skyVB = skyboxVB, skyboxPipeline != nil {
-            skyU.viewProjNoTrans = viewProjNoTranslation(view: uniforms.view, proj: uniforms.proj)
+        if let skyTex = skyboxTexture,
+           let skyVB = skyboxVB,
+           skyboxPipeline != nil {
+            skyU.viewProjNoTrans = viewProjNoTranslation(
+                view: uniforms.view,
+                proj: uniforms.proj
+            )
             enc.setRenderPipelineState(skyboxPipeline)
             enc.setDepthStencilState(skyboxDepthState)
             enc.setCullMode(.none)
@@ -579,6 +623,7 @@ final class Renderer: NSObject, MTKViewDelegate {
                 let rotation = cached.preTransform
 
                 uniforms.model = translation * rotation * scaleM
+                uniforms.modelIndex = Float(idx)
 
                 for (i, vb) in cached.mesh.vertexBuffers.enumerated() {
                     enc.setVertexBuffer(vb.buffer, offset: vb.offset, index: i)
@@ -589,11 +634,13 @@ final class Renderer: NSObject, MTKViewDelegate {
                 enc.setFragmentTexture(cached.texture, index: 0)
 
                 for sub in cached.mesh.submeshes where sub.indexCount > 0 {
-                    enc.drawIndexedPrimitives(type: .triangle,
-                                              indexCount: sub.indexCount,
-                                              indexType: sub.indexType,
-                                              indexBuffer: sub.indexBuffer.buffer,
-                                              indexBufferOffset: sub.indexBuffer.offset)
+                    enc.drawIndexedPrimitives(
+                        type: .triangle,
+                        indexCount: sub.indexCount,
+                        indexType: sub.indexType,
+                        indexBuffer: sub.indexBuffer.buffer,
+                        indexBufferOffset: sub.indexBuffer.offset
+                    )
                 }
             }
         }

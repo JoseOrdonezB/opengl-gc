@@ -25,125 +25,245 @@ vertex Varyings v_main(VertexIn vin [[stage_in]],
 {
     Varyings out;
 
-    float4 posWS = u.model * float4(vin.position, 1.0);
-    out.position = u.proj * (u.view * posWS);
+    float3 p = vin.position;
+    float3 n = normalize(vin.normal);
+
+    float4 posWS = u.model * float4(p, 1.0);
+    float4 posVS = u.view * posWS;
+    out.position = u.proj * posVS;
+
+    float3x3 M = float3x3(u.model[0].xyz, u.model[1].xyz, u.model[2].xyz);
 
 #if USE_NORMAL_MATRIX
-    float3x3 M    = float3x3(u.model[0].xyz, u.model[1].xyz, u.model[2].xyz);
     float3x3 Nmat = transpose(inverse3x3(M));
-    out.normalWS  = normalize(Nmat * vin.normal);
+    float3 nWS = normalize(Nmat * n);
 #else
-    float3x3 M3   = float3x3(u.model[0].xyz, u.model[1].xyz, u.model[2].xyz);
-    out.normalWS  = normalize(M3 * vin.normal);
+    float3 nWS = normalize(M * n);
 #endif
 
-    out.uv = fixUV(vin.uv);
+    out.normalWS = nWS;
+    out.uv       = fixUV(vin.uv);
+
+    float3x3 V3  = float3x3(u.view[0].xyz, u.view[1].xyz, u.view[2].xyz);
+    out.normalVS = normalize(V3 * nWS);
+    out.viewDirVS = normalize(-posVS.xyz);
+
     return out;
 }
 
-// 1) v_noise_deform
-vertex Varyings v_noise_deform(VertexIn vin [[stage_in]],
-                               constant Uniforms& u [[buffer(1)]])
+static inline Varyings vert_plant_sway(VertexIn vin,
+                                       constant Uniforms& u)
 {
-    const float freq = 3.0;
-    const float amp  = 0.08;
-    const float oct2 = 0.5;
-
-    float3 pObj = vin.position;
-    float3 nObj = normalize(vin.normal);
-
-    float n1 = hash3(pObj * freq);
-    float n2 = hash3(pObj * (freq * 2.07));
-    float noise = (n1 - 0.5) + oct2 * (n2 - 0.5);
-
-    pObj += nObj * (noise * amp);
-
-    float4 posWS = u.model * float4(pObj, 1.0);
-
     Varyings out;
-    out.position = u.proj * (u.view * posWS);
+
+    float3 p = vin.position;
+    float3 n = normalize(vin.normal);
+    float  t = u.time;
+
+    float heightMask = clamp((p.y + 1.5f) * 0.5f, 0.0f, 1.0f);
+
+    float sway    = sin(t * 1.5f + p.y * 0.7f) * 0.15f * heightMask;
+    float forward = cos(t * 1.2f + p.x * 0.8f) * 0.08f * heightMask;
+
+    p.x += sway;
+    p.z += forward;
+
+    float4 posWS = u.model * float4(p, 1.0);
+    float4 posVS = u.view * posWS;
+    out.position = u.proj * posVS;
+
+    float3x3 M = float3x3(u.model[0].xyz, u.model[1].xyz, u.model[2].xyz);
 
 #if USE_NORMAL_MATRIX
-    float3x3 M    = float3x3(u.model[0].xyz, u.model[1].xyz, u.model[2].xyz);
     float3x3 Nmat = transpose(inverse3x3(M));
-    out.normalWS  = normalize(Nmat * nObj);
+    float3 nWS = normalize(Nmat * n);
 #else
-    float3x3 M3   = float3x3(u.model[0].xyz, u.model[1].xyz, u.model[2].xyz);
-    out.normalWS  = normalize(M3 * nObj);
+    float3 nWS = normalize(M * n);
 #endif
 
-    out.uv = fixUV(vin.uv);
+    out.normalWS = nWS;
+    out.uv       = fixUV(vin.uv);
+
+    float3x3 V3  = float3x3(u.view[0].xyz, u.view[1].xyz, u.view[2].xyz);
+    out.normalVS = normalize(V3 * nWS);
+    out.viewDirVS = normalize(-posVS.xyz);
+
     return out;
 }
 
-// 2) v_thin_shrink
-vertex Varyings v_thin_shrink(VertexIn vin [[stage_in]],
-                              constant Uniforms& u [[buffer(1)]])
+static inline Varyings vert_breath_pulse(VertexIn vin,
+                                         constant Uniforms& u)
 {
-    const float shrink    = 0.55;
-    const float centerY   = 0.0;
-    const float hourglass = 0.0;
-
-    float3 pObj = vin.position;
-    float3 nObj = vin.normal;
-
-    float yAbs = fabs(pObj.y - centerY);
-    float t    = clamp(hourglass * yAbs, 0.0, 1.0);
-    float s    = mix(shrink, 1.0, t);
-
-    pObj.x *= s;
-    pObj.z *= s;
-
-    float3 nDeformed = normalize(float3(nObj.x / s, nObj.y, nObj.z / s));
-
-    float4 posWS = u.model * float4(pObj, 1.0);
-
     Varyings out;
-    out.position = u.proj * (u.view * posWS);
+
+    float3 p = vin.position;
+    float3 n = normalize(vin.normal);
+    float  t = u.time;
+
+    float beat  = sin(t * 3.0f) * 0.06f;
+    float scale = 1.0f + beat;
+    p *= scale;
+
+    float topMask = clamp((p.y + 1.0f) * 0.5f, 0.0f, 1.0f);
+    p.y += sin(t * 4.0f + p.x * 2.0f) * 0.05f * topMask;
+
+    float4 posWS = u.model * float4(p, 1.0);
+    float4 posVS = u.view * posWS;
+    out.position = u.proj * posVS;
+
+    float3x3 M = float3x3(u.model[0].xyz, u.model[1].xyz, u.model[2].xyz);
 
 #if USE_NORMAL_MATRIX
-    float3x3 M    = float3x3(u.model[0].xyz, u.model[1].xyz, u.model[2].xyz);
     float3x3 Nmat = transpose(inverse3x3(M));
-    out.normalWS  = normalize(Nmat * nDeformed);
+    float3 nWS = normalize(Nmat * n);
 #else
-    float3x3 M3   = float3x3(u.model[0].xyz, u.model[1].xyz, u.model[2].xyz);
-    out.normalWS  = normalize(M3 * nDeformed);
+    float3 nWS = normalize(M * n);
 #endif
 
-    out.uv = fixUV(vin.uv);
+    out.normalWS = nWS;
+    out.uv       = fixUV(vin.uv);
+
+    float3x3 V3  = float3x3(u.view[0].xyz, u.view[1].xyz, u.view[2].xyz);
+    out.normalVS = normalize(V3 * nWS);
+    out.viewDirVS = normalize(-posVS.xyz);
+
     return out;
 }
 
-// 3) v_twist_y
-vertex Varyings v_twist_y(VertexIn vin [[stage_in]],
-                          constant Uniforms& u [[buffer(1)]])
+static inline Varyings vert_electric_wobble(VertexIn vin,
+                                            constant Uniforms& u)
 {
-    const float twistStrength = 0.9;
-    const float yCenter       = 0.0;
-
-    float3 pObj = vin.position;
-    float3 nObj = normalize(vin.normal);
-
-    float yRel  = pObj.y - yCenter;
-    float angle = twistStrength * yRel;
-
-    pObj = rotateY(pObj, angle);
-    nObj = normalize(rotateY(nObj, angle));
-
-    float4 posWS = u.model * float4(pObj, 1.0);
-
     Varyings out;
-    out.position = u.proj * (u.view * posWS);
+
+    float3 p = vin.position;
+    float3 n = normalize(vin.normal);
+    float  t = u.time;
+
+    float mainWave = sin(p.y * 6.0f + t * 8.0f) * 0.04f;
+    float jitter   = (hash3(float3(p.x * 4.0f, p.y * 4.0f, t * 2.0f)) - 0.5f) * 0.04f;
+
+    p.x += mainWave + jitter;
+    p.z += -mainWave * 0.6f;
+    p.y += sin(p.x * 4.0f + t * 5.0f) * 0.02f;
+
+    float4 posWS = u.model * float4(p, 1.0);
+    float4 posVS = u.view * posWS;
+    out.position = u.proj * posVS;
+
+    float3x3 M = float3x3(u.model[0].xyz, u.model[1].xyz, u.model[2].xyz);
 
 #if USE_NORMAL_MATRIX
-    float3x3 M    = float3x3(u.model[0].xyz, u.model[1].xyz, u.model[2].xyz);
     float3x3 Nmat = transpose(inverse3x3(M));
-    out.normalWS  = normalize(Nmat * nObj);
+    float3 nWS = normalize(Nmat * n);
 #else
-    float3x3 M3   = float3x3(u.model[0].xyz, u.model[1].xyz, u.model[2].xyz);
-    out.normalWS  = normalize(M3 * nObj);
+    float3 nWS = normalize(M * n);
 #endif
 
-    out.uv = fixUV(vin.uv);
+    out.normalWS = nWS;
+    out.uv       = fixUV(vin.uv);
+
+    float3x3 V3  = float3x3(u.view[0].xyz, u.view[1].xyz, u.view[2].xyz);
+    out.normalVS = normalize(V3 * nWS);
+    out.viewDirVS = normalize(-posVS.xyz);
+
     return out;
+}
+
+static inline Varyings vert_head_bob(VertexIn vin,
+                                     constant Uniforms& u)
+{
+    Varyings out;
+
+    float3 p = vin.position;
+    float3 n = normalize(vin.normal);
+    float  t = u.time;
+
+    float topMask = clamp((p.y + 0.5f) * 0.6f, 0.0f, 1.0f);
+
+    float bob   = sin(t * 3.0f) * 0.12f * topMask;
+    p.y += bob;
+
+    float angle = sin(t * 2.5f) * 0.35f * topMask;
+    p = rotateY(p, angle);
+    n = normalize(rotateY(n, angle));
+
+    float4 posWS = u.model * float4(p, 1.0);
+    float4 posVS = u.view * posWS;
+    out.position = u.proj * posVS;
+
+    float3x3 M = float3x3(u.model[0].xyz, u.model[1].xyz, u.model[2].xyz);
+
+#if USE_NORMAL_MATRIX
+    float3x3 Nmat = transpose(inverse3x3(M));
+    float3 nWS = normalize(Nmat * n);
+#else
+    float3 nWS = normalize(M * n);
+#endif
+
+    out.normalWS = nWS;
+    out.uv       = fixUV(vin.uv);
+
+    float3x3 V3  = float3x3(u.view[0].xyz, u.view[1].xyz, u.view[2].xyz);
+    out.normalVS = normalize(V3 * nWS);
+    out.viewDirVS = normalize(-posVS.xyz);
+
+    return out;
+}
+
+static inline Varyings vert_stage_wave(VertexIn vin,
+                                       constant Uniforms& u)
+{
+    Varyings out;
+
+    float3 p = vin.position;
+    float3 n = normalize(vin.normal);
+    float  t = u.time;
+
+    float2 xz = p.xz;
+    float  r  = length(xz);
+
+    float fade = 1.0f - clamp(r / 6.0f, 0.0f, 1.0f);
+    float wave = sin(r * 4.5f - t * 3.0f) * 0.08f * fade;
+
+    p.y += wave;
+
+    float4 posWS = u.model * float4(p, 1.0);
+    float4 posVS = u.view * posWS;
+    out.position = u.proj * posVS;
+
+    float3x3 M = float3x3(u.model[0].xyz, u.model[1].xyz, u.model[2].xyz);
+
+#if USE_NORMAL_MATRIX
+    float3x3 Nmat = transpose(inverse3x3(M));
+    float3 nWS = normalize(Nmat * n);
+#else
+    float3 nWS = normalize(M * n);
+#endif
+
+    out.normalWS = nWS;
+    out.uv       = fixUV(vin.uv);
+
+    float3x3 V3  = float3x3(u.view[0].xyz, u.view[1].xyz, u.view[2].xyz);
+    out.normalVS = normalize(V3 * nWS);
+    out.viewDirVS = normalize(-posVS.xyz);
+
+    return out;
+}
+
+vertex Varyings v_party_mix(VertexIn vin [[stage_in]],
+                            constant Uniforms& u [[buffer(1)]])
+{
+    float idx = u.modelIndex;
+
+    if (idx < 0.5f) {
+        return vert_plant_sway(vin, u);
+    } else if (idx < 1.5f) {
+        return vert_breath_pulse(vin, u);
+    } else if (idx < 2.5f) {
+        return vert_electric_wobble(vin, u);
+    } else if (idx < 3.5f) {
+        return vert_head_bob(vin, u);
+    } else {
+        return vert_stage_wave(vin, u);
+    }
 }

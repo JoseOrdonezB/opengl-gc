@@ -71,8 +71,8 @@ final class GestureMTKView: MTKView {
         case 2:   onKeyChange?(.right, isDown)
         case 13:  onKeyChange?(.down,  isDown)
         case 1:   onKeyChange?(.up,    isDown)
-        case 12: onKeyChange?(.zoomIn,  isDown)
-        case 14: onKeyChange?(.zoomOut, isDown)
+        case 12:  onKeyChange?(.zoomIn,  isDown)
+        case 14:  onKeyChange?(.zoomOut, isDown)
         default:
             break
         }
@@ -169,17 +169,14 @@ struct MetalView: NSViewRepresentable {
             case "5": renderer?.setCameraPreset(4)
             case "0": renderer?.setCameraPreset(nil)
 
-           // case "q", "Q": renderer?.selectFragmentShader(index: 1)
-           // case "w", "W": renderer?.selectFragmentShader(index: 2)
-           // case "e", "E": renderer?.selectFragmentShader(index: 3)
+            case "p", "P":
+                renderer?.toggleShaders()
 
-           // case "a", "A": renderer?.selectVertexShader(index: 1)
-           // case "s", "S": renderer?.selectVertexShader(index: 2)
-           // case "d", "D": renderer?.selectVertexShader(index: 3)
+            case "r", "R":
+                renderer?.resetShadersToDefault()
 
-            case "r", "R": renderer?.resetShadersToDefault()
-
-            default: break
+            default:
+                break
             }
         }
 
