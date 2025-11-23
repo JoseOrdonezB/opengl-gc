@@ -96,6 +96,7 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     let camera = OrbitCamera()
     private var useDebugCamera = false
+    private var activeCameraPreset: Int? = nil
 
     private lazy var sampler: MTLSamplerState = {
         let d = MTLSamplerDescriptor()
@@ -138,8 +139,6 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     struct SkyboxUniforms { var viewProjNoTrans: simd_float4x4 }
     private var skyU = SkyboxUniforms(viewProjNoTrans: .identity)
-
-    private var printedIndexInfo = false
 
     private var keyLeft  = false
     private var keyRight = false
@@ -211,7 +210,6 @@ final class Renderer: NSObject, MTKViewDelegate {
                 buildMeshPipeline()
             }
 
-            printedIndexInfo = false
             return cached
         } catch {
             return nil
@@ -239,15 +237,9 @@ final class Renderer: NSObject, MTKViewDelegate {
     private func buildMeshPipeline() { rebuildPipeline() }
 
     private func rebuildPipeline() {
-        guard let lib = device.makeDefaultLibrary() else {
-            return
-        }
-        guard let v = lib.makeFunction(name: currentVertexFnName) else {
-            return
-        }
-        guard let f = lib.makeFunction(name: currentFragmentFnName) else {
-            return
-        }
+        guard let lib = device.makeDefaultLibrary() else { return }
+        guard let v = lib.makeFunction(name: currentVertexFnName) else { return }
+        guard let f = lib.makeFunction(name: currentFragmentFnName) else { return }
 
         let p = MTLRenderPipelineDescriptor()
         p.vertexFunction   = v
@@ -300,6 +292,14 @@ final class Renderer: NSObject, MTKViewDelegate {
     }
 
     func toggleDebugCamera() { useDebugCamera.toggle() }
+
+    func setCameraPreset(_ index: Int?) {
+        if let idx = index, idx >= 0, idx < models.count {
+            activeCameraPreset = idx
+        } else {
+            activeCameraPreset = nil
+        }
+    }
 
     private func buildDepth() {
         let d = MTLDepthStencilDescriptor()
@@ -478,11 +478,53 @@ final class Renderer: NSObject, MTKViewDelegate {
                              height: Double(ds.height),
                              znear: 0.0, zfar: 1.0)
 
-        if useDebugCamera {
+        if let preset = activeCameraPreset,
+           preset >= 0, preset < models.count {
+            let m = models[preset]
+            let target: SIMD3<Float>
+            let eye: SIMD3<Float>
+
+            switch preset {
+            case 0:
+                target = m.position + SIMD3<Float>(0, 0.6, 0)
+                eye    = target + SIMD3<Float>(0.0, 0.8, 2.2)
+
+            case 1:
+                target = m.position + SIMD3<Float>(0, 0.6, 0)
+                eye    = target + SIMD3<Float>(0.3, 0.7, 2.0)
+
+            case 2:
+                target = m.position + SIMD3<Float>(0, 0.6, 0)
+                eye    = target + SIMD3<Float>(-0.3, 0.7, 2.0)
+
+            case 3:
+                target = m.position + SIMD3<Float>(0, 0.7, 0)
+                eye    = target + SIMD3<Float>(0.0, 0.8, -3)
+
+            case 4:
+                target = m.position + SIMD3<Float>(-2, 0.5, -1.5)
+                eye    = target + SIMD3<Float>(-2.5, 2.5, -2.5)
+
+            default:
+                target = m.position
+                eye    = target + SIMD3<Float>(0, 1.5, 3)
+            }
+
+            uniforms.view = makeLookAt(eye: eye,
+                                       center: target,
+                                       up: SIMD3<Float>(0, 1, 0))
+            uniforms.proj = makePerspective(fovyRadians: .pi/3,
+                                            aspect: aspect,
+                                            near: 0.01,
+                                            far: 100)
+        } else if useDebugCamera {
             uniforms.view = makeLookAt(eye: SIMD3<Float>(0, 0, 3),
                                        center: SIMD3<Float>(0, 0, 0),
                                        up: SIMD3<Float>(0, 1, 0))
-            uniforms.proj = makePerspective(fovyRadians: .pi/3, aspect: aspect, near: 0.01, far: 100)
+            uniforms.proj = makePerspective(fovyRadians: .pi/3,
+                                            aspect: aspect,
+                                            near: 0.01,
+                                            far: 100)
         } else {
             camera.aspect = aspect
             uniforms.view  = camera.viewMatrix
@@ -554,7 +596,6 @@ final class Renderer: NSObject, MTKViewDelegate {
                                               indexBufferOffset: sub.indexBuffer.offset)
                 }
             }
-            printedIndexInfo = true
         }
 
         enc.endEncoding()
@@ -565,7 +606,6 @@ final class Renderer: NSObject, MTKViewDelegate {
     func handleOrbit(delta: SIMD2<Float>) { camera.orbit(deltaYaw: delta.x * -0.5, deltaPitch: delta.y * 0.5) }
     func handleZoom(by scale: Float)      { camera.zoom(scale: scale) }
     func handlePan(delta: SIMD2<Float>)   { camera.pan(delta: delta * 80.0) }
-
 }
 
 extension Renderer {
@@ -577,7 +617,7 @@ extension Renderer {
         case .up:     keyUp    = isDown
         case .down:   keyDown  = isDown
         case .zoomIn: keyZIn   = isDown
-        case .zoomOut:keyZOut  = isDown
+        case .zoomOut: keyZOut = isDown
         }
     }
 

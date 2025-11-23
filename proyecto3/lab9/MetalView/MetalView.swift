@@ -71,10 +71,8 @@ final class GestureMTKView: MTKView {
         case 2:   onKeyChange?(.right, isDown)
         case 13:  onKeyChange?(.down,  isDown)
         case 1:   onKeyChange?(.up,    isDown)
-
         case 12: onKeyChange?(.zoomIn,  isDown)
         case 14: onKeyChange?(.zoomOut, isDown)
-
         default:
             break
         }
@@ -164,15 +162,22 @@ struct MetalView: NSViewRepresentable {
 
         view.onKey = { [weak renderer] ch in
             switch ch {
-            case "1": renderer?.selectFragmentShader(index: 1)
-            case "2": renderer?.selectFragmentShader(index: 2)
-            case "3": renderer?.selectFragmentShader(index: 3)
-            case "4": renderer?.selectVertexShader(index: 1)
-            case "5": renderer?.selectVertexShader(index: 2)
-            case "6": renderer?.selectVertexShader(index: 3)
-            case "v", "V": renderer?.selectVertexShader(index: 1)
-            case "b", "B": renderer?.selectVertexShader(index: 0)
-            case "0": renderer?.resetShadersToDefault()
+            case "1": renderer?.setCameraPreset(0)
+            case "2": renderer?.setCameraPreset(1)
+            case "3": renderer?.setCameraPreset(2)
+            case "4": renderer?.setCameraPreset(3)
+            case "5": renderer?.setCameraPreset(4)
+            case "0": renderer?.setCameraPreset(nil)
+
+           // case "q", "Q": renderer?.selectFragmentShader(index: 1)
+           // case "w", "W": renderer?.selectFragmentShader(index: 2)
+           // case "e", "E": renderer?.selectFragmentShader(index: 3)
+
+           // case "a", "A": renderer?.selectVertexShader(index: 1)
+           // case "s", "S": renderer?.selectVertexShader(index: 2)
+           // case "d", "D": renderer?.selectVertexShader(index: 3)
+
+            case "r", "R": renderer?.resetShadersToDefault()
 
             default: break
             }
