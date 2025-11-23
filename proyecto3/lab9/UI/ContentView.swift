@@ -11,5 +11,11 @@ struct ContentView: View {
     var body: some View {
         MetalView()
             .ignoresSafeArea()
+            .onAppear {
+                BGMPlayer.shared.play()
+            }
+            .onDisappear {
+                BGMPlayer.shared.stop()
+            }
     }
 }
