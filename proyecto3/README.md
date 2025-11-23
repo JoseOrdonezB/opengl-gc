@@ -14,17 +14,18 @@
 
 ---
 
-## Cambiar de modelo
-- **Modelo 1**: **J**  
-- **Modelo 2**: **K**
-- **Modelo 3**: **L**  
-- **Recentrar cámara al modelo actual**: **L**
+## Camaras en los modelos
+- **Modelo 1**: **1**  
+- **Modelo 2**: **2**
+- **Modelo 3**: **3**
+- **Modelo 4**: **4**
+- **Vista general**: **5**
+- **Cámara principal**: **0**
   
 ---
 
 ## Atajos de shaders
-- **Fragment**: **1** = `f_metal`, **2** = `f_toon_rim`, **3** = `f_matcap_solid`
-- **Vertex**: **4**, **5**, **6** (variantes)
-- **Reset shaders**: **0**
+- **Activar Shaders**: **P** 
+- **Desactivar Shaders**: **R**
 
 ---
